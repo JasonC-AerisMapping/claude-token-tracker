@@ -1,0 +1,90 @@
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build exe
+        run: pyinstaller --onefile --windowed --name "ClaudeTokenTracker" claude_token_tracker.py
+
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          iscc installer.iss
+
+      - name: Upload Windows exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeTokenTracker-Windows-exe
+          path: dist/ClaudeTokenTracker.exe
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeTokenTracker-Windows-Setup
+          path: installer_output/ClaudeTokenTracker_Setup.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build macOS app
+        run: pyinstaller --onefile --windowed --name "ClaudeTokenTracker" claude_token_tracker.py
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_contents
+          cp -r dist/ClaudeTokenTracker.app dmg_contents/ 2>/dev/null || cp dist/ClaudeTokenTracker dmg_contents/
+          hdiutil create -volname "Claude Token Tracker" -srcfolder dmg_contents -ov -format UDZO ClaudeTokenTracker.dmg
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeTokenTracker-macOS
+          path: ClaudeTokenTracker.dmg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ClaudeTokenTracker-Windows-exe/ClaudeTokenTracker.exe
+            artifacts/ClaudeTokenTracker-Windows-Setup/ClaudeTokenTracker_Setup.exe
+            artifacts/ClaudeTokenTracker-macOS/ClaudeTokenTracker.dmg
+          generate_release_notes: true
