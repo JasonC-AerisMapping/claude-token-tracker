@@ -1,0 +1,4 @@
+{"type":"ai-title","aiTitle":"Test session title"}
+{"type":"user","timestamp":"2026-04-15T10:00:00Z","entrypoint":"cli"}
+{"type":"assistant","timestamp":"2026-04-15T10:00:05Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}}}
+{"type":"assistant","timestamp":"2026-04-15T10:05:00Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":80,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":700}}}
