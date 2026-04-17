@@ -22,7 +22,8 @@
     background: linear-gradient(135deg, #1a0b2e 0%, #2d1b4e 40%, #0d2540 100%);
     min-height: 100vh;
     padding: 24px 28px 40px 28px;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
   /* Background glow blobs */
   .glow {
@@ -139,7 +140,7 @@
   /* ── Hero row — 4 big cards ──────────── */
   .hero {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 14px;
     margin-bottom: 14px;
   }
@@ -179,7 +180,7 @@
   /* ── Insights strip ───────────────────── */
   .insights {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 14px;
     margin-bottom: 14px;
   }
@@ -218,7 +219,7 @@
   /* ── Main chart row ───────────────────── */
   .main-charts {
     display: grid;
-    grid-template-columns: 1.6fr 1fr;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
     gap: 14px;
     margin-bottom: 14px;
   }
@@ -303,7 +304,7 @@
   /* ── Breakdown row ────────────────────── */
   .breakdown {
     display: grid;
-    grid-template-columns: 0.9fr 1.3fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 14px;
     margin-bottom: 14px;
   }
@@ -484,4 +485,38 @@
   background: rgba(255,255,255,0.12);
   color: #fff;
   box-shadow: 0 0 12px rgba(139,92,246,0.3);
+}
+
+/* ── Responsive ───────────────────────────── */
+@media (max-width: 960px) {
+  .main-charts {
+    grid-template-columns: 1fr;
+  }
+  .header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .header-right {
+    flex-wrap: wrap;
+  }
+  .session-row {
+    grid-template-columns: 2fr 1.2fr 0.9fr 0.9fr 1fr;
+  }
+  .session-row > .session-model,
+  .session-row > .mini-spark,
+  .session-row.header > :nth-child(3),
+  .session-row.header > :nth-child(6) {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .stage { padding: 16px 14px 28px 14px; }
+  .hero-value { font-size: 28px; }
+  .session-row {
+    grid-template-columns: 2fr 0.9fr 0.9fr 1fr;
+  }
+  .session-row > .session-project,
+  .session-row.header > :nth-child(2) {
+    display: none;
+  }
 }

@@ -9,18 +9,34 @@ function dashboard() {
 
     async init() {
       this._initCharts();
-      await this.refresh();
-      setInterval(() => this.refresh(), 5000);
       window.addEventListener("resize", () => this._resizeCharts());
+      const boot = () => {
+        this.refresh();
+        setInterval(() => this.refresh(), 5000);
+      };
+      if (window.pywebview?.api?.get_dashboard) {
+        boot();
+      } else {
+        window.addEventListener("pywebviewready", boot, { once: true });
+      }
     },
 
     async refresh() {
-      if (!window.pywebview?.api?.get_dashboard) return;
-      const snap = await window.pywebview.api.get_dashboard(this.range, null);
-      if (snap && !snap.error) {
-        this.data = snap;
-        this.updatedAt = new Date().toLocaleTimeString([], { hour12: false });
-        this._renderCharts();
+      if (!window.pywebview?.api?.get_dashboard) {
+        console.warn("pywebview bridge not ready");
+        return;
+      }
+      try {
+        const snap = await window.pywebview.api.get_dashboard(this.range, null);
+        if (snap && !snap.error) {
+          this.data = snap;
+          this.updatedAt = new Date().toLocaleTimeString([], { hour12: false });
+          this._renderCharts();
+        } else {
+          console.warn("dashboard returned error or empty:", snap);
+        }
+      } catch (err) {
+        console.error("refresh failed:", err);
       }
     },
 
