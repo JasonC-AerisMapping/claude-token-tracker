@@ -190,7 +190,7 @@ def _today_tokens(sessions: Iterable[Session], now: datetime) -> int:
     return total
 
 
-def _session_to_dict(s: Session) -> dict:
+def session_to_dict(s: Session) -> dict:
     # Velocity sparkline: 8 bars, each = tokens summed in that 1/8 of session lifespan.
     velocity = [0] * 8
     if s.messages and s.first_timestamp and s.last_timestamp:
@@ -269,5 +269,5 @@ def build_snapshot(
             "cache_create": cache_w_sum,
             "cache_read": cache_r_sum,
         },
-        "sessions": [_session_to_dict(s) for s in non_sub[:15]],
+        "sessions": [session_to_dict(s) for s in non_sub[:15]],
     }

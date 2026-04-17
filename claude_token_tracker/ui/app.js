@@ -44,9 +44,10 @@ function dashboard() {
       return "$" + x.toFixed(2);
     },
     fmtTrend(pct) {
-      if (pct == null || pct === 0) return "—";
-      const arrow = pct >= 0 ? "↑" : "↓";
-      return arrow + " " + (pct * 100).toFixed(1) + "% vs last week";
+      if (pct == null) return "—";
+      if (pct === 0) return "flat vs last week";
+      const arrow = pct > 0 ? "↑" : "↓";
+      return arrow + " " + (Math.abs(pct) * 100).toFixed(1) + "% vs last week";
     },
     fmtHour(h) {
       if (h == null) return "—";
@@ -78,7 +79,7 @@ function dashboard() {
       return days.map((d) => {
         const row = daily[d];
         if (which === "total") return row.total;
-        if (which === "today") return row.total;
+        if (which === "today") return row.output;
         if (which === "hit") {
           const denom = row.input + row.cache_read;
           return denom > 0 ? row.cache_read / denom : 0;
@@ -262,7 +263,7 @@ function dashboard() {
           tooltip: { trigger: "axis", backgroundColor: "#1a0b2e", borderColor: "#8b5cf6", textStyle: { color: "#fff" } },
           grid: { left: 90, right: 40, top: 8, bottom: 20 },
           xAxis: { type: "value", splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
-          yAxis: { type: "category", data: names, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "JetBrains Mono" } },
+          yAxis: { type: "category", data: names, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "Cascadia Mono, Consolas, ui-monospace, monospace" } },
           series: [{
             type: "bar",
             data: totals.map((v, i) => ({ value: v, itemStyle: { color: colors[i % colors.length], borderRadius: 999 } })),

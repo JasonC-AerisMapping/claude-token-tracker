@@ -80,8 +80,7 @@ def test_incremental_scanner_only_reads_new_bytes(fixtures_dir, tmp_path):
     assert len(sessions[0].messages) == 3
 
 
-def test_incremental_scanner_path_whitelist(tmp_path):
-    # root doesn't exist → empty scan, no error
+def test_incremental_scanner_missing_root_returns_empty(tmp_path):
     scanner = IncrementalScanner(root=tmp_path / "does-not-exist")
     assert scanner.scan() == []
 

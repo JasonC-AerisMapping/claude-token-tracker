@@ -12,7 +12,7 @@
     --dim2:   rgba(255,255,255,0.75);
   }
   html, body {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     background: #0a0a0f;
     color: var(--text);
     min-height: 100vh;
@@ -426,11 +426,11 @@
   .session-project { color: var(--dim2); }
   .session-model {
     color: #c4b5fd;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
     font-size: 11px;
     font-weight: 500;
   }
-  .session-num { font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .session-num { font-weight: 600; font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace; font-size: 11px; }
   .session-num.in  { color: #7dd3fc; }
   .session-num.out { color: #f9a8d4; }
   .mini-spark {

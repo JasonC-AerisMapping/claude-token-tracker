@@ -1,8 +1,9 @@
 """Incremental JSONL parser for Claude Code session files.
 
 A full scan reads the entire file; an incremental scan tracks byte offsets
-per file and only reads new bytes on subsequent passes. Files outside
-``~/.claude/projects`` are rejected.
+per file and only reads new bytes on subsequent passes. The scanner only
+walks ``*.jsonl`` files under the ``root`` it was constructed with — callers
+are responsible for pinning that root to ``~/.claude/projects``.
 """
 import json
 from dataclasses import dataclass
