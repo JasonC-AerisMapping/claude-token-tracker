@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_token_tracker.bridge.api import Api
+from prompt_ledger.bridge.api import Api
 
 
 def _write_session(root: Path, project: str, session_id: str, *, ts="2026-04-15T12:00:00Z") -> Path:

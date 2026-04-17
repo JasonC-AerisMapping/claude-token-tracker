@@ -20,8 +20,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run tests
+        run: python -m pytest -q
+
       - name: Build exe
-        run: pyinstaller --onefile --windowed --name "ClaudeTokenTracker" claude_token_tracker.py
+        run: pyinstaller PromptLedger.spec --noconfirm
 
       - name: Build installer
         run: |
@@ -31,14 +34,14 @@ jobs:
       - name: Upload Windows exe
         uses: actions/upload-artifact@v4
         with:
-          name: ClaudeTokenTracker-Windows-exe
-          path: dist/ClaudeTokenTracker.exe
+          name: PromptLedger-Windows-exe
+          path: dist/PromptLedger.exe
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: ClaudeTokenTracker-Windows-Setup
-          path: installer_output/ClaudeTokenTracker_Setup.exe
+          name: PromptLedger-Windows-Setup
+          path: installer_output/PromptLedger_Setup.exe
 
   build-macos:
     runs-on: macos-latest
@@ -53,20 +56,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run tests
+        run: python -m pytest -q
+
       - name: Build macOS app
-        run: pyinstaller --onefile --windowed --name "ClaudeTokenTracker" claude_token_tracker.py
+        run: pyinstaller PromptLedger.spec --noconfirm
 
       - name: Create DMG
         run: |
           mkdir -p dmg_contents
-          cp -r dist/ClaudeTokenTracker.app dmg_contents/ 2>/dev/null || cp dist/ClaudeTokenTracker dmg_contents/
-          hdiutil create -volname "Claude Token Tracker" -srcfolder dmg_contents -ov -format UDZO ClaudeTokenTracker.dmg
+          if [ -d "dist/PromptLedger.app" ]; then
+            cp -r dist/PromptLedger.app dmg_contents/
+          else
+            cp dist/PromptLedger dmg_contents/
+          fi
+          hdiutil create -volname "Prompt Ledger" -srcfolder dmg_contents -ov -format UDZO PromptLedger.dmg
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v4
         with:
-          name: ClaudeTokenTracker-macOS
-          path: ClaudeTokenTracker.dmg
+          name: PromptLedger-macOS
+          path: PromptLedger.dmg
 
   release:
     needs: [build-windows, build-macos]
@@ -84,7 +94,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/ClaudeTokenTracker-Windows-exe/ClaudeTokenTracker.exe
-            artifacts/ClaudeTokenTracker-Windows-Setup/ClaudeTokenTracker_Setup.exe
-            artifacts/ClaudeTokenTracker-macOS/ClaudeTokenTracker.dmg
+            artifacts/PromptLedger-Windows-exe/PromptLedger.exe
+            artifacts/PromptLedger-Windows-Setup/PromptLedger_Setup.exe
+            artifacts/PromptLedger-macOS/PromptLedger.dmg
           generate_release_notes: true

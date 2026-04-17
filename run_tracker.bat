@@ -1,5 +1,5 @@
 @echo off
-title Claude Token Tracker
+title Prompt Ledger
 cd /d "%~dp0"
 
 set PYTHON=py -3.12
@@ -11,6 +11,6 @@ if errorlevel 1 (
     %PYTHON% -m pip install -r requirements.txt
 )
 echo.
-echo Launching Claude Token Tracker...
+echo Launching Prompt Ledger...
 %PYTHON% app.py
 pause

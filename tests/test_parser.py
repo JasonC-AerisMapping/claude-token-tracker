@@ -1,4 +1,4 @@
-from claude_token_tracker.core.parser import parse_session_file, IncrementalScanner
+from prompt_ledger.core.parser import parse_session_file, IncrementalScanner
 
 
 def test_parse_basic_session_file(fixtures_dir):

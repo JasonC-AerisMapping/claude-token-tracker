@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
-from claude_token_tracker.core.aggregator import (
+from prompt_ledger.core.aggregator import (
     aggregate_by_model,
     aggregate_by_project,
     aggregate_daily,
     filter_by_range,
 )
-from claude_token_tracker.core.models import Message, Session, TokenUsage
+from prompt_ledger.core.models import Message, Session, TokenUsage
 
 
 def _make_session(project: str, model: str, messages: list[tuple[datetime, int]]) -> Session:
@@ -72,7 +72,7 @@ def test_filter_by_range_all_returns_everything():
 
 from datetime import timedelta
 
-from claude_token_tracker.core.aggregator import (
+from prompt_ledger.core.aggregator import (
     cache_hit_rate,
     peak_hour,
     streak_days,
@@ -175,7 +175,7 @@ def test_cache_savings_excludes_unknown_model():
     assert total_cache_savings_usd([s]) == 0.0
 
 
-from claude_token_tracker.core.aggregator import build_snapshot
+from prompt_ledger.core.aggregator import build_snapshot
 
 
 def test_build_snapshot_shape():

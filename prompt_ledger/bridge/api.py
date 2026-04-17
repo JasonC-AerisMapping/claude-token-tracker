@@ -7,14 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from claude_token_tracker.core.aggregator import (
+from prompt_ledger.core.aggregator import (
     VALID_RANGES,
     build_snapshot,
     session_to_dict,
 )
-from claude_token_tracker.core.parser import IncrementalScanner
+from prompt_ledger.core.parser import IncrementalScanner
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 
 class Api:

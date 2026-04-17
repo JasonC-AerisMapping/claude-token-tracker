@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from claude_token_tracker.core.models import Message, Session, TokenUsage
+from prompt_ledger.core.models import Message, Session, TokenUsage
 
 
 def test_token_usage_sums():

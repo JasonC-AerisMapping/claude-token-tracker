@@ -1,10 +1,10 @@
-"""Claude Token Tracker — entrypoint."""
+"""Prompt Ledger — entrypoint."""
 import sys
 from pathlib import Path
 
 import webview
 
-from claude_token_tracker.bridge.api import Api
+from prompt_ledger.bridge.api import Api
 
 CLAUDE_DIR = Path.home() / ".claude" / "projects"
 
@@ -19,7 +19,7 @@ def _ui_dir() -> Path:
         base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
     else:
         base = Path(__file__).parent
-    return base / "claude_token_tracker" / "ui"
+    return base / "prompt_ledger" / "ui"
 
 
 def main() -> None:
@@ -30,7 +30,7 @@ def main() -> None:
         raise SystemExit(f"UI assets not found at {index}")
 
     webview.create_window(
-        title="Claude Token Tracker",
+        title="Prompt Ledger",
         url=str(index),
         js_api=api,
         width=1500,

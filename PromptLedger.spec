@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('claude_token_tracker/ui', 'claude_token_tracker/ui'),
+        ('prompt_ledger/ui', 'prompt_ledger/ui'),
     ],
     hiddenimports=(
         collect_submodules('webview')
@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ClaudeTokenTracker',
+    name='PromptLedger',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
