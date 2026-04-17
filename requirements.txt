@@ -1,3 +1,4 @@
 pywebview
+pywin32 ; platform_system == "Windows"
 pytest
 pyinstaller

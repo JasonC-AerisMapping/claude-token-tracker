@@ -8,7 +8,11 @@ a = Analysis(
     datas=[
         ('claude_token_tracker/ui', 'claude_token_tracker/ui'),
     ],
-    hiddenimports=collect_submodules('webview'),
+    hiddenimports=(
+        collect_submodules('webview')
+        + collect_submodules('win32com')
+        + ['win32gui', 'win32api', 'win32con', 'pythoncom', 'pywintypes']
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
