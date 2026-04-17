@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Literal
 
 from .models import Message, Session, TokenUsage
-from .pricing import normalize_model
+from .pricing import cache_savings_usd, normalize_model
 
 Range = Literal["24h", "7d", "30d", "all"]
 VALID_RANGES: frozenset[str] = frozenset({"24h", "7d", "30d", "all"})
@@ -76,3 +76,53 @@ def filter_by_range(sessions: Iterable[Session], range_: Range, now: datetime) -
             last_timestamp=kept[-1].timestamp,
         ))
     return out
+
+
+def cache_hit_rate(sessions: Iterable[Session]) -> float:
+    """cache_read / (input + cache_read) across all sessions."""
+    input_total = 0
+    cache_read_total = 0
+    for s in sessions:
+        for m in s.messages:
+            input_total += m.usage.input
+            cache_read_total += m.usage.cache_read
+    denom = input_total + cache_read_total
+    if denom == 0:
+        return 0.0
+    return cache_read_total / denom
+
+
+def streak_days(sessions: Iterable[Session], now: datetime) -> int:
+    """Consecutive days (ending on ``now``'s date) with at least one message."""
+    active: set[str] = set()
+    for s in sessions:
+        for m in s.messages:
+            active.add(m.timestamp.strftime("%Y-%m-%d"))
+    count = 0
+    day = now.date()
+    while day.strftime("%Y-%m-%d") in active:
+        count += 1
+        day = day - timedelta(days=1)
+    return count
+
+
+def peak_hour(sessions: Iterable[Session]) -> int | None:
+    """Hour-of-day (0-23) with the most total tokens. None if no data."""
+    buckets: dict[int, int] = defaultdict(int)
+    any_data = False
+    for s in sessions:
+        for m in s.messages:
+            buckets[m.timestamp.hour] += m.usage.total
+            any_data = True
+    if not any_data:
+        return None
+    return max(buckets.items(), key=lambda kv: kv[1])[0]
+
+
+def total_cache_savings_usd(sessions: Iterable[Session]) -> float:
+    """Sum cache savings across sessions, skipping unknown models."""
+    total = 0.0
+    for s in sessions:
+        cr = sum(m.usage.cache_read for m in s.messages)
+        total += cache_savings_usd(s.model, cr)
+    return total

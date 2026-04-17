@@ -69,3 +69,107 @@ def test_filter_by_range_all_returns_everything():
     s = _make_session("demo", "claude-opus-4-7", [(t1, 5), (t2, 10)])
     filtered = filter_by_range([s], range_="all", now=t2)
     assert len(filtered[0].messages) == 2
+
+from datetime import timedelta
+
+from claude_token_tracker.core.aggregator import (
+    cache_hit_rate,
+    peak_hour,
+    streak_days,
+    total_cache_savings_usd,
+)
+
+
+def test_cache_hit_rate_zero_when_no_input():
+    assert cache_hit_rate([]) == 0.0
+
+
+def test_cache_hit_rate_basic():
+    now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-opus-4-7", is_subagent=False,
+        messages=[
+            Message(timestamp=now, usage=TokenUsage(input=100, cache_read=900)),
+        ],
+    )
+    # cache_read / (input + cache_read) = 900 / 1000 = 0.9
+    assert cache_hit_rate([s]) == 0.9
+
+
+def test_streak_days_single_today():
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False,
+        messages=[Message(timestamp=now, usage=TokenUsage(input=1))],
+    )
+    assert streak_days([s], now=now) == 1
+
+
+def test_streak_days_consecutive():
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    days = [now - timedelta(days=d) for d in range(5)]  # today + 4 prior
+    msgs = [Message(timestamp=d, usage=TokenUsage(input=1)) for d in days]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False, messages=msgs,
+    )
+    assert streak_days([s], now=now) == 5
+
+
+def test_streak_days_broken_by_gap():
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    # Today and 3 days ago (gap of 2)
+    msgs = [
+        Message(timestamp=now, usage=TokenUsage(input=1)),
+        Message(timestamp=now - timedelta(days=3), usage=TokenUsage(input=1)),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False, messages=msgs,
+    )
+    assert streak_days([s], now=now) == 1
+
+
+def test_peak_hour_returns_busiest_hour():
+    day = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=day, usage=TokenUsage(input=100)),
+        Message(timestamp=day.replace(hour=9), usage=TokenUsage(input=10)),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False, messages=msgs,
+    )
+    assert peak_hour([s]) == 14
+
+
+def test_peak_hour_none_when_empty():
+    assert peak_hour([]) is None
+
+
+def test_cache_savings_sums_per_model():
+    now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s1 = Session(
+        file="/tmp/a", project="p", session_id="a", title=None,
+        model="claude-opus-4-7", is_subagent=False,
+        messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
+    )
+    s2 = Session(
+        file="/tmp/b", project="p", session_id="b", title=None,
+        model="claude-sonnet-4-6", is_subagent=False,
+        messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
+    )
+    # Opus: (15 - 1.5) = 13.5 ; Sonnet: (3 - 0.3) = 2.7 → total 16.20
+    assert abs(total_cache_savings_usd([s1, s2]) - 16.20) < 0.01
+
+
+def test_cache_savings_excludes_unknown_model():
+    now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="future-model-9000", is_subagent=False,
+        messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
+    )
+    assert total_cache_savings_usd([s]) == 0.0
