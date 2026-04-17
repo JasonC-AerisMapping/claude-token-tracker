@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'none'; img-src 'self' data:;">
+<title>Claude Token Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script defer src="vendor/alpine.min.js"></script>
+<script src="vendor/echarts.min.js"></script>
+</head>
+<body>
+<div class="stage" x-data="dashboard()" x-init="init()">
+  <div class="glow g1"></div>
+  <div class="glow g2"></div>
+  <div class="glow g3"></div>
+
+  <div class="content">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">
+        <div class="logo-dot"></div>
+        <div>
+          <div class="logo-text">Claude Token Tracker</div>
+          <div class="logo-sub">Max plan</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <!-- Range filter -->
+        <div class="range-filter">
+          <template x-for="r in ['24h','7d','30d','all']" :key="r">
+            <button
+              class="range-btn"
+              :class="{'active': range === r}"
+              @click="setRange(r)"
+              x-text="r"></button>
+          </template>
+        </div>
+        <div class="updated" x-text="'Updated ' + updatedAt"></div>
+        <div class="live"><span class="live-dot"></span>LIVE</div>
+      </div>
+    </div>
+
+    <!-- Hero cards -->
+    <div class="hero">
+      <div class="glass">
+        <div class="card-label"><span class="card-icon">Σ</span>Total tokens</div>
+        <div class="hero-value grad-purple" x-text="fmt(data.total_tokens)">—</div>
+        <div class="hero-delta" x-text="fmtTrend(data.weekly_trend_pct)">—</div>
+        <div class="sparkline" x-html="sparkBars(sparkSeries('total'), 'purple')"></div>
+      </div>
+      <div class="glass">
+        <div class="card-label"><span class="card-icon">◎</span>Today</div>
+        <div class="hero-value grad-pink" x-text="fmt(data.today_tokens)">—</div>
+        <div class="hero-delta" x-text="(data.sessions?.length ?? 0) + ' recent sessions'"></div>
+        <div class="sparkline pink" x-html="sparkBars(sparkSeries('today'), 'pink')"></div>
+      </div>
+      <div class="glass">
+        <div class="card-label"><span class="card-icon">↻</span>Cache hit rate</div>
+        <div class="hero-value grad-cyan" x-text="fmtPct(data.cache_hit_rate)">—</div>
+        <div class="hero-delta">of input comes from cache</div>
+        <div class="sparkline cyan" x-html="sparkBars(sparkSeries('hit'), 'cyan')"></div>
+      </div>
+      <div class="glass">
+        <div class="card-label"><span class="card-icon">$</span>Cache savings</div>
+        <div class="hero-value grad-mint" x-text="fmtUsd(data.cache_savings_usd)">—</div>
+        <div class="hero-delta">saved vs. no-cache pricing</div>
+        <div class="sparkline mint" x-html="sparkBars(sparkSeries('savings'), 'mint')"></div>
+      </div>
+    </div>
+
+    <!-- Insights strip -->
+    <div class="insights">
+      <div class="glass chip">
+        <div class="chip-icon flame">🔥</div>
+        <div>
+          <div class="chip-label">Streak</div>
+          <div class="chip-value" x-text="(data.streak_days ?? 0) + ' day' + ((data.streak_days === 1) ? '' : 's') + ' in a row'"></div>
+        </div>
+      </div>
+      <div class="glass chip">
+        <div class="chip-icon clock">⏰</div>
+        <div>
+          <div class="chip-label">Peak hour</div>
+          <div class="chip-value" x-text="fmtHour(data.peak_hour)"></div>
+        </div>
+      </div>
+      <div class="glass chip">
+        <div class="chip-icon bolt">⚡</div>
+        <div>
+          <div class="chip-label">Active now</div>
+          <div class="chip-value" x-text="fmtActive(data.active_now_tpm)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main charts -->
+    <div class="main-charts">
+      <div class="glass">
+        <div class="chart-title">30-day token usage</div>
+        <div class="chart-sub">Stacked by type · 7-day moving average overlay</div>
+        <div id="chart-daily" class="area-wrap"></div>
+      </div>
+      <div class="glass">
+        <div class="chart-title">Activity heatmap</div>
+        <div class="chart-sub">When do you use Claude? · Day of week × hour</div>
+        <div id="chart-heatmap" style="height: 240px; margin-top: 8px;"></div>
+      </div>
+    </div>
+
+    <!-- Breakdowns -->
+    <div class="breakdown">
+      <div class="glass">
+        <div class="chart-title">Token mix</div>
+        <div class="chart-sub" x-text="'Range: ' + range"></div>
+        <div id="chart-donut" style="height: 260px;"></div>
+      </div>
+      <div class="glass">
+        <div class="chart-title">Tokens by project</div>
+        <div class="chart-sub">Top 6 · click to filter</div>
+        <div id="chart-projects" style="height: 260px; margin-top: 8px;"></div>
+      </div>
+      <div class="glass">
+        <div class="chart-title">Tokens by model</div>
+        <div class="chart-sub" x-text="'Range: ' + range"></div>
+        <div id="chart-models" style="height: 260px; margin-top: 8px;"></div>
+      </div>
+    </div>
+
+    <!-- Sessions table -->
+    <div class="glass session-table">
+      <div class="session-head">
+        <div class="chart-title">Recent sessions</div>
+        <div class="chart-sub" style="margin:0" x-text="(data.sessions?.length ?? 0) + ' shown'"></div>
+      </div>
+      <div class="session-rows">
+        <div class="session-row header">
+          <div>Session</div><div>Project</div><div>Model</div>
+          <div>In</div><div>Out</div><div>Velocity</div><div>When</div>
+        </div>
+        <template x-for="s in (data.sessions ?? [])" :key="s.session_id">
+          <div class="session-row">
+            <div class="session-title" x-text="s.title"></div>
+            <div class="session-project" x-text="s.project"></div>
+            <div class="session-model" x-text="s.model"></div>
+            <div class="session-num in" x-text="fmt(s.input_tokens)"></div>
+            <div class="session-num out" x-text="fmt(s.output_tokens)"></div>
+            <div class="mini-spark" x-html="sparkBars(s.velocity, 'purple')"></div>
+            <div class="session-when" x-text="fmtWhen(s.last_timestamp)"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
