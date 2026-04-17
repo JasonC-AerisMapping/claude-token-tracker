@@ -173,3 +173,45 @@ def test_cache_savings_excludes_unknown_model():
         messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
     )
     assert total_cache_savings_usd([s]) == 0.0
+
+
+from claude_token_tracker.core.aggregator import build_snapshot
+
+
+def test_build_snapshot_shape():
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="demo", session_id="x", title="Test", model="claude-opus-4-7",
+        is_subagent=False,
+        messages=[
+            Message(timestamp=now, usage=TokenUsage(input=100, output=50, cache_read=900)),
+        ],
+    )
+    snap = build_snapshot([s], range_="30d", now=now)
+    for key in [
+        "range", "generated_at",
+        "total_tokens", "today_tokens", "cache_hit_rate", "cache_savings_usd",
+        "streak_days", "peak_hour", "active_now_tpm",
+        "daily", "heatmap", "by_project", "by_model", "token_mix",
+        "sessions",
+        "weekly_trend_pct",
+    ]:
+        assert key in snap, f"missing key: {key}"
+    assert snap["range"] == "30d"
+    assert snap["total_tokens"] == 100 + 50 + 900
+    assert len(snap["sessions"]) == 1
+    assert snap["sessions"][0]["title"] == "Test"
+
+
+def test_build_snapshot_heatmap_shape():
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model="claude-opus-4-7",
+        is_subagent=False,
+        messages=[Message(timestamp=now, usage=TokenUsage(input=10))],
+    )
+    snap = build_snapshot([s], range_="30d", now=now)
+    # Heatmap: 7 days × 24 hours = 168 cells of [day_index, hour, value]
+    assert len(snap["heatmap"]) == 168
+    for cell in snap["heatmap"]:
+        assert len(cell) == 3

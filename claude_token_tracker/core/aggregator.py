@@ -126,3 +126,148 @@ def total_cache_savings_usd(sessions: Iterable[Session]) -> float:
         cr = sum(m.usage.cache_read for m in s.messages)
         total += cache_savings_usd(s.model, cr)
     return total
+
+
+def _usage_to_dict(u: TokenUsage) -> dict:
+    return {
+        "input": u.input,
+        "output": u.output,
+        "cache_create": u.cache_create,
+        "cache_read": u.cache_read,
+        "total": u.total,
+    }
+
+
+def _active_now_tpm(sessions: Iterable[Session], now: datetime) -> float | None:
+    cutoff = now - timedelta(minutes=5)
+    recent_total = 0
+    recent_any = False
+    earliest: datetime | None = None
+    for s in sessions:
+        for m in s.messages:
+            if m.timestamp >= cutoff:
+                recent_total += m.usage.total
+                recent_any = True
+                if earliest is None or m.timestamp < earliest:
+                    earliest = m.timestamp
+    if not recent_any:
+        return None
+    span_minutes = max((now - earliest).total_seconds() / 60.0, 0.5)
+    return recent_total / span_minutes
+
+
+def _weekly_trend_pct(sessions: Iterable[Session], now: datetime) -> float:
+    this_week = filter_by_range(sessions, "7d", now)
+    prev_end = now - timedelta(days=7)
+    prev = filter_by_range(sessions, "7d", prev_end)
+    this_total = sum(s.total_tokens for s in this_week)
+    prev_total = sum(s.total_tokens for s in prev)
+    if prev_total == 0:
+        return 0.0
+    return (this_total - prev_total) / prev_total
+
+
+def _heatmap(sessions: Iterable[Session]) -> list[list[int]]:
+    grid: dict[tuple[int, int], int] = defaultdict(int)
+    for s in sessions:
+        for m in s.messages:
+            # weekday: Mon=0..Sun=6
+            grid[(m.timestamp.weekday(), m.timestamp.hour)] += m.usage.total
+    cells: list[list[int]] = []
+    for d in range(7):
+        for h in range(24):
+            cells.append([d, h, grid.get((d, h), 0)])
+    return cells
+
+
+def _today_tokens(sessions: Iterable[Session], now: datetime) -> int:
+    today_str = now.strftime("%Y-%m-%d")
+    total = 0
+    for s in sessions:
+        for m in s.messages:
+            if m.timestamp.strftime("%Y-%m-%d") == today_str:
+                total += m.usage.total
+    return total
+
+
+def _session_to_dict(s: Session) -> dict:
+    # Velocity sparkline: 8 bars, each = tokens summed in that 1/8 of session lifespan.
+    velocity = [0] * 8
+    if s.messages and s.first_timestamp and s.last_timestamp:
+        start = s.first_timestamp
+        span = (s.last_timestamp - start).total_seconds() or 1.0
+        for m in s.messages:
+            pos = int(((m.timestamp - start).total_seconds() / span) * 8)
+            pos = min(max(pos, 0), 7)
+            velocity[pos] += m.usage.total
+    return {
+        "session_id": s.session_id,
+        "title": s.title or s.session_id,
+        "project": s.project,
+        "model": normalize_model(s.model),
+        "input_tokens": s.input_tokens,
+        "output_tokens": s.output_tokens,
+        "cache_create_tokens": s.cache_create_tokens,
+        "cache_read_tokens": s.cache_read_tokens,
+        "total_tokens": s.total_tokens,
+        "velocity": velocity,
+        "last_timestamp": s.last_timestamp.isoformat() if s.last_timestamp else None,
+        "is_subagent": s.is_subagent,
+    }
+
+
+def build_snapshot(
+    sessions: Iterable[Session],
+    range_: Range,
+    now: datetime,
+    project: str | None = None,
+) -> dict:
+    """Single dict returned to JS with everything the dashboard needs."""
+    all_sessions = list(sessions)
+    if project:
+        all_sessions = [s for s in all_sessions if s.project == project]
+
+    in_range = filter_by_range(all_sessions, range_, now)
+
+    total = sum(s.total_tokens for s in in_range)
+    input_sum = sum(s.input_tokens for s in in_range)
+    output_sum = sum(s.output_tokens for s in in_range)
+    cache_w_sum = sum(s.cache_create_tokens for s in in_range)
+    cache_r_sum = sum(s.cache_read_tokens for s in in_range)
+
+    daily = {d: _usage_to_dict(u) for d, u in aggregate_daily(in_range).items()}
+    projects = {p: _usage_to_dict(u) for p, u in aggregate_by_project(in_range).items()}
+    models = {m: _usage_to_dict(u) for m, u in aggregate_by_model(in_range).items()}
+
+    non_sub = sorted(
+        [s for s in in_range if not s.is_subagent],
+        key=lambda s: s.last_timestamp or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+    hour = peak_hour(in_range)
+
+    return {
+        "range": range_,
+        "project": project,
+        "generated_at": now.isoformat(),
+        "total_tokens": total,
+        "today_tokens": _today_tokens(all_sessions, now),
+        "cache_hit_rate": cache_hit_rate(in_range),
+        "cache_savings_usd": total_cache_savings_usd(in_range),
+        "streak_days": streak_days(all_sessions, now),
+        "peak_hour": hour,
+        "active_now_tpm": _active_now_tpm(all_sessions, now),
+        "weekly_trend_pct": _weekly_trend_pct(all_sessions, now),
+        "daily": daily,
+        "heatmap": _heatmap(in_range),
+        "by_project": projects,
+        "by_model": models,
+        "token_mix": {
+            "input": input_sum,
+            "output": output_sum,
+            "cache_create": cache_w_sum,
+            "cache_read": cache_r_sum,
+        },
+        "sessions": [_session_to_dict(s) for s in non_sub[:15]],
+    }
