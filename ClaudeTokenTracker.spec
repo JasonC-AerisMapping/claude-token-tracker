@@ -10,9 +10,8 @@ a = Analysis(
     ],
     hiddenimports=(
         collect_submodules('webview')
-        + collect_submodules('win32com')
-        + collect_submodules('comtypes')
-        + ['win32gui', 'win32api', 'win32con', 'pythoncom', 'pywintypes']
+        + collect_submodules('clr_loader')
+        + ['clr', 'pythonnet']
     ),
     hookspath=[],
     hooksconfig={},
