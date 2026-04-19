@@ -3,12 +3,25 @@ from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Literal
+from zoneinfo import ZoneInfo
 
 from .models import Message, Session, TokenUsage
 from .pricing import cache_savings_usd, normalize_model
 
 Range = Literal["24h", "7d", "30d", "all"]
 VALID_RANGES: frozenset[str] = frozenset({"24h", "7d", "30d", "all"})
+
+# All calendar-aware rollups (daily buckets, streak day count, peak hour,
+# heatmap weekday/hour, "today") are reported in Eastern time so the dashboard
+# matches the user's wall clock instead of UTC.
+DISPLAY_TZ = ZoneInfo("America/New_York")
+
+
+def _to_display(dt: datetime) -> datetime:
+    """Convert a datetime to DISPLAY_TZ. Naive datetimes are assumed to be UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(DISPLAY_TZ)
 
 
 def _sum_usage(messages: Iterable[Message]) -> TokenUsage:
@@ -22,11 +35,11 @@ def _sum_usage(messages: Iterable[Message]) -> TokenUsage:
 
 
 def aggregate_daily(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
-    """Return {YYYY-MM-DD: TokenUsage} sorted by date ascending."""
+    """Return {YYYY-MM-DD: TokenUsage} keyed by local (DISPLAY_TZ) date."""
     buckets: dict[str, list[Message]] = defaultdict(list)
     for s in sessions:
         for m in s.messages:
-            buckets[m.timestamp.strftime("%Y-%m-%d")].append(m)
+            buckets[_to_display(m.timestamp).strftime("%Y-%m-%d")].append(m)
     return {day: _sum_usage(msgs) for day, msgs in sorted(buckets.items())}
 
 
@@ -78,28 +91,55 @@ def filter_by_range(sessions: Iterable[Session], range_: Range, now: datetime) -
     return out
 
 
-def cache_hit_rate(sessions: Iterable[Session]) -> float:
-    """cache_read / (input + cache_read) across all sessions."""
+def cache_efficiency(sessions: Iterable[Session]) -> float:
+    """Share of billable input tokens served from cache.
+
+    Formula: cache_read / (input + cache_read + cache_create)
+
+    Unlike a naive hit rate that only compares cache_read vs input, this
+    includes cache_create in the denominator — those are tokens paid at
+    full input price to populate the cache. A pure-cache session (no new
+    writes) approaches 1.0; heavy cache churn pushes the number down.
+    """
     input_total = 0
     cache_read_total = 0
+    cache_create_total = 0
     for s in sessions:
         for m in s.messages:
             input_total += m.usage.input
             cache_read_total += m.usage.cache_read
-    denom = input_total + cache_read_total
+            cache_create_total += m.usage.cache_create
+    denom = input_total + cache_read_total + cache_create_total
     if denom == 0:
         return 0.0
     return cache_read_total / denom
 
 
+def cache_reuse_ratio(sessions: Iterable[Session]) -> float:
+    """Average times each cache-written token is read back: cache_read / cache_create.
+
+    1.0 = break-even (each written token read exactly once).
+    Higher = caching is paying off. 0.0 when no cache writes recorded.
+    """
+    cache_read_total = 0
+    cache_create_total = 0
+    for s in sessions:
+        for m in s.messages:
+            cache_read_total += m.usage.cache_read
+            cache_create_total += m.usage.cache_create
+    if cache_create_total == 0:
+        return 0.0
+    return cache_read_total / cache_create_total
+
+
 def streak_days(sessions: Iterable[Session], now: datetime) -> int:
-    """Consecutive days (ending on ``now``'s date) with at least one message."""
+    """Consecutive local (DISPLAY_TZ) days ending today with at least one message."""
     active: set[str] = set()
     for s in sessions:
         for m in s.messages:
-            active.add(m.timestamp.strftime("%Y-%m-%d"))
+            active.add(_to_display(m.timestamp).strftime("%Y-%m-%d"))
     count = 0
-    day = now.date()
+    day = _to_display(now).date()
     while day.strftime("%Y-%m-%d") in active:
         count += 1
         day = day - timedelta(days=1)
@@ -107,12 +147,12 @@ def streak_days(sessions: Iterable[Session], now: datetime) -> int:
 
 
 def peak_hour(sessions: Iterable[Session]) -> int | None:
-    """Hour-of-day (0-23) with the most total tokens. None if no data."""
+    """Local (DISPLAY_TZ) hour-of-day (0-23) with the most tokens. None if no data."""
     buckets: dict[int, int] = defaultdict(int)
     any_data = False
     for s in sessions:
         for m in s.messages:
-            buckets[m.timestamp.hour] += m.usage.total
+            buckets[_to_display(m.timestamp).hour] += m.usage.total
             any_data = True
     if not any_data:
         return None
@@ -157,35 +197,47 @@ def _active_now_tpm(sessions: Iterable[Session], now: datetime) -> float | None:
 
 
 def _weekly_trend_pct(sessions: Iterable[Session], now: datetime) -> float:
-    this_week = filter_by_range(sessions, "7d", now)
-    prev_end = now - timedelta(days=7)
-    prev = filter_by_range(sessions, "7d", prev_end)
-    this_total = sum(s.total_tokens for s in this_week)
-    prev_total = sum(s.total_tokens for s in prev)
+    # Two disjoint 7-day windows: [now-14d, now-7d) is "previous", [now-7d, now] is "this".
+    # filter_by_range only has a lower bound, so compare message-by-message here.
+    this_start = now - timedelta(days=7)
+    prev_start = now - timedelta(days=14)
+    this_total = 0
+    prev_total = 0
+    for s in sessions:
+        for m in s.messages:
+            if m.timestamp >= this_start and m.timestamp <= now:
+                this_total += m.usage.total
+            elif m.timestamp >= prev_start and m.timestamp < this_start:
+                prev_total += m.usage.total
     if prev_total == 0:
         return 0.0
     return (this_total - prev_total) / prev_total
 
 
 def _heatmap(sessions: Iterable[Session]) -> list[list[int]]:
+    # Cells are emitted as [hour, day_index, total] to match ECharts'
+    # [xIndex, yIndex, value] convention (xAxis=hours 0..23, yAxis=days Mon..Sun).
+    # Weekday and hour are computed in DISPLAY_TZ so the grid matches the user's
+    # wall clock rather than UTC.
     grid: dict[tuple[int, int], int] = defaultdict(int)
     for s in sessions:
         for m in s.messages:
+            local = _to_display(m.timestamp)
             # weekday: Mon=0..Sun=6
-            grid[(m.timestamp.weekday(), m.timestamp.hour)] += m.usage.total
+            grid[(local.weekday(), local.hour)] += m.usage.total
     cells: list[list[int]] = []
     for d in range(7):
         for h in range(24):
-            cells.append([d, h, grid.get((d, h), 0)])
+            cells.append([h, d, grid.get((d, h), 0)])
     return cells
 
 
 def _today_tokens(sessions: Iterable[Session], now: datetime) -> int:
-    today_str = now.strftime("%Y-%m-%d")
+    today_str = _to_display(now).strftime("%Y-%m-%d")
     total = 0
     for s in sessions:
         for m in s.messages:
-            if m.timestamp.strftime("%Y-%m-%d") == today_str:
+            if _to_display(m.timestamp).strftime("%Y-%m-%d") == today_str:
                 total += m.usage.total
     return total
 
@@ -253,7 +305,8 @@ def build_snapshot(
         "generated_at": now.isoformat(),
         "total_tokens": total,
         "today_tokens": _today_tokens(all_sessions, now),
-        "cache_hit_rate": cache_hit_rate(in_range),
+        "cache_efficiency": cache_efficiency(in_range),
+        "cache_reuse_ratio": cache_reuse_ratio(in_range),
         "cache_savings_usd": total_cache_savings_usd(in_range),
         "streak_days": streak_days(all_sessions, now),
         "peak_hour": hour,

@@ -1,17 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('prompt_ledger/ui', 'prompt_ledger/ui'),
-    ],
+    datas=(
+        [('prompt_ledger/ui', 'prompt_ledger/ui')]
+        + collect_data_files('tzdata')
+    ),
     hiddenimports=(
         collect_submodules('webview')
         + collect_submodules('clr_loader')
-        + ['clr', 'pythonnet']
+        + ['clr', 'pythonnet', 'tzdata']
     ),
     hookspath=[],
     hooksconfig={},

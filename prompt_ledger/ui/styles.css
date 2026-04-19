@@ -168,11 +168,36 @@
     align-items: flex-end;
     gap: 3px;
   }
+  .sparkline { position: relative; }
   .sparkline span {
     flex: 1;
     border-radius: 2px;
     background: linear-gradient(to top, rgba(192,132,252,0.9), rgba(192,132,252,0.25));
+    cursor: default;
+    transition: filter 0.12s;
   }
+  .sparkline span:hover { filter: brightness(1.35); }
+  .spark-tip {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    background: #1a0b2e;
+    border: 1px solid #8b5cf6;
+    color: #fff;
+    padding: 5px 9px;
+    border-radius: 6px;
+    white-space: nowrap;
+    font-size: 11px;
+    font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.12s, transform 0.12s;
+  }
+  .spark-tip.visible { opacity: 1; transform: translateY(0); }
   .sparkline.pink span  { background: linear-gradient(to top, rgba(236,72,153,0.9), rgba(236,72,153,0.25)); }
   .sparkline.cyan span  { background: linear-gradient(to top, rgba(6,182,212,0.9), rgba(6,182,212,0.25)); }
   .sparkline.mint span  { background: linear-gradient(to top, rgba(52,211,153,0.9), rgba(52,211,153,0.25)); }
@@ -241,6 +266,77 @@
     position: relative;
   }
   .area-wrap svg { width: 100%; height: 100%; }
+  .daily-guide {
+    position: absolute;
+    width: 0;
+    border-left: 1px dashed rgba(139,92,246,0.55);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+    z-index: 2;
+  }
+  .daily-guide.visible { opacity: 1; }
+  .daily-tip {
+    position: absolute;
+    min-width: 180px;
+    max-width: 260px;
+    background: #1a0b2e;
+    border: 1px solid #8b5cf6;
+    color: #fff;
+    padding: 10px 12px;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.12s, transform 0.12s;
+    z-index: 3;
+  }
+  .daily-tip.visible { opacity: 1; transform: translateY(0); }
+  .daily-tip-head {
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    margin-bottom: 6px;
+  }
+  .daily-tip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .daily-tip-row .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .daily-tip-row .val {
+    font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+    font-weight: 600;
+  }
+  .daily-tip-total {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 12px;
+    line-height: 1.6;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+  }
+  .daily-tip-total > span:first-child {
+    color: rgba(255,255,255,0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+  }
+  .daily-tip-total .val {
+    font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+    font-weight: 700;
+  }
   .legend {
     display: flex;
     gap: 14px;
@@ -406,14 +502,18 @@
   .session-rows { padding: 0 8px 10px 8px; }
   .session-row {
     display: grid;
-    grid-template-columns: 2fr 1.2fr 1fr 0.9fr 0.9fr 1fr 1fr;
+    grid-template-columns: 1.6fr 1.4fr 0.8fr 0.8fr 1fr 0.9fr;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 14px;
+    padding: 10px 14px;
     border-radius: 12px;
     font-size: 12px;
     transition: background 0.15s;
   }
+  .session-row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-row .num,
+  .session-row .session-num,
+  .session-row .session-when { text-align: right; font-variant-numeric: tabular-nums; }
   .session-row:hover { background: rgba(255,255,255,0.04); }
   .session-row.header {
     font-size: 10px;
@@ -423,8 +523,7 @@
     text-transform: uppercase;
     padding-top: 4px; padding-bottom: 4px;
   }
-  .session-title { font-weight: 600; }
-  .session-project { color: var(--dim2); }
+  .session-project { color: var(--fg); font-weight: 600; }
   .session-model {
     color: #c4b5fd;
     font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
@@ -439,11 +538,35 @@
     align-items: flex-end;
     height: 20px;
     gap: 2px;
+    overflow: visible;
   }
   .mini-spark span {
     flex: 1;
     background: linear-gradient(to top, rgba(139,92,246,0.9), rgba(236,72,153,0.6));
     border-radius: 1px;
+    position: relative;
+    cursor: default;
+    transition: filter 0.12s;
+  }
+  .mini-spark span:hover { filter: brightness(1.35); }
+  .mini-spark span[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a0b2e;
+    border: 1px solid #8b5cf6;
+    color: #fff;
+    padding: 5px 9px;
+    border-radius: 6px;
+    white-space: nowrap;
+    font-size: 11px;
+    font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
   }
   .session-when { color: var(--dim); font-size: 11px; }
 
@@ -500,12 +623,12 @@
     flex-wrap: wrap;
   }
   .session-row {
-    grid-template-columns: 2fr 1.2fr 0.9fr 0.9fr 1fr;
+    grid-template-columns: 1.6fr 0.8fr 0.8fr 0.9fr;
   }
   .session-row > .session-model,
   .session-row > .mini-spark,
-  .session-row.header > :nth-child(3),
-  .session-row.header > :nth-child(6) {
+  .session-row.header > :nth-child(2),
+  .session-row.header > :nth-child(5) {
     display: none;
   }
 }
@@ -513,10 +636,10 @@
   .stage { padding: 16px 14px 28px 14px; }
   .hero-value { font-size: 28px; }
   .session-row {
-    grid-template-columns: 2fr 0.9fr 0.9fr 1fr;
+    grid-template-columns: 1.2fr 0.9fr 0.9fr;
   }
-  .session-row > .session-project,
-  .session-row.header > :nth-child(2) {
+  .session-row > .session-when,
+  .session-row.header > :nth-child(6) {
     display: none;
   }
 }

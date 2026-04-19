@@ -73,18 +73,19 @@ def test_filter_by_range_all_returns_everything():
 from datetime import timedelta
 
 from prompt_ledger.core.aggregator import (
-    cache_hit_rate,
+    cache_efficiency,
+    cache_reuse_ratio,
     peak_hour,
     streak_days,
     total_cache_savings_usd,
 )
 
 
-def test_cache_hit_rate_zero_when_no_input():
-    assert cache_hit_rate([]) == 0.0
+def test_cache_efficiency_zero_when_no_data():
+    assert cache_efficiency([]) == 0.0
 
 
-def test_cache_hit_rate_basic():
+def test_cache_efficiency_basic():
     now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
     s = Session(
         file="/tmp/x", project="p", session_id="x", title=None,
@@ -93,8 +94,39 @@ def test_cache_hit_rate_basic():
             Message(timestamp=now, usage=TokenUsage(input=100, cache_read=900)),
         ],
     )
-    # cache_read / (input + cache_read) = 900 / 1000 = 0.9
-    assert cache_hit_rate([s]) == 0.9
+    # cache_read / (input + cache_read + cache_create) = 900 / (100 + 900 + 0) = 0.9
+    assert cache_efficiency([s]) == 0.9
+
+
+def test_cache_efficiency_penalizes_cache_writes():
+    # Same 900 cache reads, but now 500 cache_create → denominator grows.
+    now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-opus-4-7", is_subagent=False,
+        messages=[
+            Message(timestamp=now, usage=TokenUsage(input=100, cache_create=500, cache_read=900)),
+        ],
+    )
+    # 900 / (100 + 900 + 500) = 0.6
+    assert cache_efficiency([s]) == 0.6
+
+
+def test_cache_reuse_ratio_zero_when_no_writes():
+    assert cache_reuse_ratio([]) == 0.0
+
+
+def test_cache_reuse_ratio_basic():
+    now = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-opus-4-7", is_subagent=False,
+        messages=[
+            Message(timestamp=now, usage=TokenUsage(cache_create=100, cache_read=350)),
+        ],
+    )
+    # 350 / 100 = 3.5
+    assert cache_reuse_ratio([s]) == 3.5
 
 
 def test_streak_days_single_today():
@@ -133,6 +165,7 @@ def test_streak_days_broken_by_gap():
 
 
 def test_peak_hour_returns_busiest_hour():
+    # 14:30 UTC on 2026-04-15 → 10:30 EDT. Peak hour should be reported in local tz.
     day = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
     msgs = [
         Message(timestamp=day, usage=TokenUsage(input=100)),
@@ -142,7 +175,7 @@ def test_peak_hour_returns_busiest_hour():
         file="/tmp/x", project="p", session_id="x", title=None, model=None,
         is_subagent=False, messages=msgs,
     )
-    assert peak_hour([s]) == 14
+    assert peak_hour([s]) == 10
 
 
 def test_peak_hour_none_when_empty():
@@ -190,7 +223,7 @@ def test_build_snapshot_shape():
     snap = build_snapshot([s], range_="30d", now=now)
     for key in [
         "range", "generated_at",
-        "total_tokens", "today_tokens", "cache_hit_rate", "cache_savings_usd",
+        "total_tokens", "today_tokens", "cache_efficiency", "cache_reuse_ratio", "cache_savings_usd",
         "streak_days", "peak_hour", "active_now_tpm",
         "daily", "heatmap", "by_project", "by_model", "token_mix",
         "sessions",
@@ -211,7 +244,77 @@ def test_build_snapshot_heatmap_shape():
         messages=[Message(timestamp=now, usage=TokenUsage(input=10))],
     )
     snap = build_snapshot([s], range_="30d", now=now)
-    # Heatmap: 7 days × 24 hours = 168 cells of [day_index, hour, value]
+    # Heatmap: 7 days × 24 hours = 168 cells of [hour, day_index, value]
+    # (ECharts heatmap convention: [xIndex, yIndex, value]; xAxis=hours, yAxis=days)
     assert len(snap["heatmap"]) == 168
     for cell in snap["heatmap"]:
         assert len(cell) == 3
+        assert 0 <= cell[0] <= 23, f"hour out of range: {cell}"
+        assert 0 <= cell[1] <= 6, f"day out of range: {cell}"
+
+
+def test_weekly_trend_pct_equal_weeks_is_zero():
+    # 100 tokens this week + 100 tokens previous week → trend should be 0%.
+    from prompt_ledger.core.aggregator import _weekly_trend_pct
+    now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
+    this_msg = Message(timestamp=now - timedelta(days=3), usage=TokenUsage(input=100))
+    prev_msg = Message(timestamp=now - timedelta(days=10), usage=TokenUsage(input=100))
+    s = Session(
+        file="/x", project="p", session_id="s", title=None, model="claude-opus-4-7",
+        is_subagent=False,
+        messages=[prev_msg, this_msg],
+    )
+    assert _weekly_trend_pct([s], now) == 0.0
+
+
+def test_weekly_trend_pct_this_week_double_prev():
+    # 200 this week, 100 previous week → +100%.
+    from prompt_ledger.core.aggregator import _weekly_trend_pct
+    now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=now - timedelta(days=3), usage=TokenUsage(input=200)),
+        Message(timestamp=now - timedelta(days=10), usage=TokenUsage(input=100)),
+    ]
+    s = Session(
+        file="/x", project="p", session_id="s", title=None, model="claude-opus-4-7",
+        is_subagent=False, messages=msgs,
+    )
+    assert _weekly_trend_pct([s], now) == 1.0
+
+
+def test_build_snapshot_heatmap_places_cell_at_hour_day():
+    # 2026-04-17 12:00 UTC = 2026-04-17 08:00 America/New_York (EDT).
+    # Weekday==4 (Fri) in both zones; local hour==8.
+    ts = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model="claude-opus-4-7",
+        is_subagent=False,
+        messages=[Message(timestamp=ts, usage=TokenUsage(input=7, output=3))],
+    )
+    snap = build_snapshot([s], range_="30d", now=ts)
+    nonzero = [c for c in snap["heatmap"] if c[2] != 0]
+    assert nonzero == [[8, 4, 10]], f"unexpected cells: {nonzero}"
+
+
+def test_eastern_date_bucketing_wraps_late_utc_to_prev_local_day():
+    # Message at 2026-04-18 03:00 UTC = 2026-04-17 23:00 America/New_York (EDT).
+    # All dashboards should bucket this message under 2026-04-17 local,
+    # at hour 23, on weekday Fri (4).
+    ts = datetime(2026, 4, 18, 3, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 18, 4, 0, tzinfo=timezone.utc)  # still 2026-04-18 00:00 EDT
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model="claude-opus-4-7",
+        is_subagent=False,
+        messages=[Message(timestamp=ts, usage=TokenUsage(input=10))],
+    )
+    from prompt_ledger.core.aggregator import aggregate_daily, peak_hour
+    daily = aggregate_daily([s])
+    assert "2026-04-17" in daily, f"expected local-date bucket 2026-04-17, got {list(daily.keys())}"
+    assert peak_hour([s]) == 23
+    snap = build_snapshot([s], range_="30d", now=now)
+    # UTC date of `now` is 2026-04-18; Eastern date is 2026-04-18; message is on 2026-04-17 Eastern.
+    # So today_tokens (local) should be 0, not 10.
+    assert snap["today_tokens"] == 0
+    # Heatmap cell at local hour=23, weekday=4 (Fri).
+    nonzero = [c for c in snap["heatmap"] if c[2] != 0]
+    assert nonzero == [[23, 4, 10]], f"unexpected cells: {nonzero}"

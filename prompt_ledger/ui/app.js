@@ -9,6 +9,8 @@ function dashboard() {
 
     async init() {
       this._initCharts();
+      this._setupSparkTips();
+      this._setupDailyOverlay();
       window.addEventListener("resize", () => this._resizeCharts());
       const boot = () => {
         this.refresh();
@@ -19,6 +21,121 @@ function dashboard() {
       } else {
         window.addEventListener("pywebviewready", boot, { once: true });
       }
+    },
+
+    _setupDailyOverlay() {
+      const host = document.getElementById("chart-daily");
+      if (!host) return;
+      host.style.position = "relative";
+      const tip = document.createElement("div");
+      tip.className = "daily-tip";
+      host.appendChild(tip);
+      const guide = document.createElement("div");
+      guide.className = "daily-guide";
+      host.appendChild(guide);
+
+      const gridLeft = 40, gridRight = 16, gridTop = 20, gridBottom = 30;
+      const colors = { input: "#60a5fa", output: "#ec4899", cache_create: "#fbbf24", cache_read: "#34d399" };
+      const fmt = (n) => Math.round(Number(n) || 0).toLocaleString("en-US");
+
+      const buildRow = (color, label, value, cls) => {
+        const line = document.createElement("div");
+        line.className = cls || "daily-tip-row";
+        const left = document.createElement("span");
+        if (color) {
+          const dot = document.createElement("span");
+          dot.className = "dot";
+          dot.style.background = color;
+          left.appendChild(dot);
+        }
+        left.appendChild(document.createTextNode(label));
+        const val = document.createElement("span");
+        val.className = "val";
+        val.textContent = fmt(value);
+        line.appendChild(left);
+        line.appendChild(val);
+        return line;
+      };
+
+      host.addEventListener("mousemove", (e) => {
+        const daily = this.data.daily || {};
+        const dates = Object.keys(daily);
+        if (dates.length === 0) { tip.classList.remove("visible"); guide.classList.remove("visible"); return; }
+        const rect = host.getBoundingClientRect();
+        const plotWidth = rect.width - gridLeft - gridRight;
+        const x = e.clientX - rect.left - gridLeft;
+        if (x < 0 || x > plotWidth) { tip.classList.remove("visible"); guide.classList.remove("visible"); return; }
+        const step = dates.length > 1 ? plotWidth / (dates.length - 1) : plotWidth;
+        const idx = Math.max(0, Math.min(dates.length - 1, Math.round(x / step)));
+        const date = dates[idx];
+        const r = daily[date] || {};
+        const total = (r.input || 0) + (r.output || 0) + (r.cache_create || 0) + (r.cache_read || 0);
+
+        while (tip.firstChild) tip.removeChild(tip.firstChild);
+        const head = document.createElement("div");
+        head.className = "daily-tip-head";
+        head.textContent = date;
+        tip.appendChild(head);
+        tip.appendChild(buildRow(colors.input, "Input", r.input || 0));
+        tip.appendChild(buildRow(colors.output, "Output", r.output || 0));
+        tip.appendChild(buildRow(colors.cache_create, "Cache write", r.cache_create || 0));
+        tip.appendChild(buildRow(colors.cache_read, "Cache read", r.cache_read || 0));
+        tip.appendChild(buildRow(null, "Total", total, "daily-tip-total"));
+        tip.classList.add("visible");
+
+        const pointX = gridLeft + idx * step;
+        guide.style.left = pointX + "px";
+        guide.style.top = gridTop + "px";
+        guide.style.height = (rect.height - gridTop - gridBottom) + "px";
+        guide.classList.add("visible");
+
+        const tipW = tip.offsetWidth;
+        let left = pointX - tipW / 2;
+        left = Math.max(4, Math.min(rect.width - tipW - 4, left));
+        tip.style.left = left + "px";
+        tip.style.top = (gridTop + 4) + "px";
+      });
+
+      host.addEventListener("mouseleave", () => {
+        tip.classList.remove("visible");
+        guide.classList.remove("visible");
+      });
+    },
+
+    _setupSparkTips() {
+      const getTip = (container) => {
+        let tip = container.querySelector(":scope > .spark-tip");
+        if (!tip) {
+          tip = document.createElement("div");
+          tip.className = "spark-tip";
+          container.appendChild(tip);
+        }
+        return tip;
+      };
+      document.addEventListener("mouseover", (e) => {
+        const bar = e.target.closest(".sparkline span[data-tip]");
+        if (!bar) return;
+        const container = bar.parentElement;
+        if (!container) return;
+        const tip = getTip(container);
+        tip.textContent = bar.getAttribute("data-tip");
+        tip.classList.add("visible");
+        const barRect = bar.getBoundingClientRect();
+        const cRect = container.getBoundingClientRect();
+        const tipWidth = tip.offsetWidth;
+        const barCenter = (barRect.left + barRect.right) / 2 - cRect.left;
+        let left = barCenter - tipWidth / 2;
+        left = Math.max(0, Math.min(cRect.width - tipWidth, left));
+        tip.style.left = left + "px";
+      });
+      document.addEventListener("mouseout", (e) => {
+        const bar = e.target.closest(".sparkline span[data-tip]");
+        if (!bar) return;
+        const container = bar.parentElement;
+        if (!container) return;
+        const tip = container.querySelector(":scope > .spark-tip");
+        if (tip) tip.classList.remove("visible");
+      });
     },
 
     async refresh() {
@@ -51,6 +168,31 @@ function dashboard() {
       if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
       return String(n);
     },
+    fmtExact(n) {
+      if (n == null) return "—";
+      return Math.round(n).toLocaleString("en-US");
+    },
+    _tooltipRow(color, name, value) {
+      const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle"></span>`;
+      return `<div style="display:flex;justify-content:space-between;gap:16px;font-size:12px;line-height:1.6"><span>${dot}${name}</span><span style="font-family:'Cascadia Mono',Consolas,ui-monospace,monospace;font-weight:600">${this.fmtExact(value)}</span></div>`;
+    },
+    _tooltipTotal(value) {
+      return `<div style="display:flex;justify-content:space-between;gap:16px;font-size:12px;line-height:1.6;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.15)"><span style="color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.06em;font-size:10px">Total</span><span style="font-family:'Cascadia Mono',Consolas,ui-monospace,monospace;font-weight:700">${this.fmtExact(value)}</span></div>`;
+    },
+    _axisTooltipFormatter(title) {
+      return (params) => {
+        if (!params?.length) return "";
+        const header = title ? title(params[0]) : params[0].axisValueLabel;
+        let total = 0;
+        const rows = params.map((p) => {
+          const v = Array.isArray(p.value) ? p.value[1] : p.value;
+          total += Number(v) || 0;
+          return this._tooltipRow(p.color, p.seriesName, v);
+        }).join("");
+        const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${header}</div>`;
+        return head + rows + (params.length > 1 ? this._tooltipTotal(total) : "");
+      };
+    },
     fmtPct(x) {
       if (x == null) return "—";
       return (x * 100).toFixed(1) + "%";
@@ -58,6 +200,10 @@ function dashboard() {
     fmtUsd(x) {
       if (x == null) return "—";
       return "$" + x.toFixed(2);
+    },
+    fmtReuse(x) {
+      if (x == null || x === 0) return "no cache writes yet";
+      return x.toFixed(1) + "× avg reuse per cached token";
     },
     fmtTrend(pct) {
       if (pct == null) return "—";
@@ -89,15 +235,24 @@ function dashboard() {
       return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     },
 
+    dailyChartTitle() {
+      const labels = { "24h": "Last 24 hours", "7d": "7-day token usage", "30d": "30-day token usage", "all": "All-time token usage" };
+      return labels[this.range] || "Token usage";
+    },
+    dailyChartSub() {
+      if (this.range === "24h") return "Stacked by type (hourly bucketing; moving average not applicable)";
+      return "Stacked by type · 7-day moving average overlay";
+    },
+
     sparkSeries(which) {
       const daily = this.data.daily || {};
       const days = Object.keys(daily).slice(-12);
       return days.map((d) => {
         const row = daily[d];
         if (which === "total") return row.total;
-        if (which === "today") return row.output;
-        if (which === "hit") {
-          const denom = row.input + row.cache_read;
+        if (which === "today") return row.total;
+        if (which === "efficiency") {
+          const denom = row.input + row.cache_read + row.cache_create;
           return denom > 0 ? row.cache_read / denom : 0;
         }
         if (which === "savings") return row.cache_read;
@@ -107,12 +262,42 @@ function dashboard() {
 
     sparkBars(values, _cls) {
       if (!values || values.length === 0) {
-        return Array(8).fill('<span style="height:5%"></span>').join("");
+        return Array(8).fill('<span style="height:5%" data-tip="No activity"></span>').join("");
       }
       const max = Math.max(...values, 1);
       return values
-        .map((v) => `<span style="height:${Math.max(5, (v / max) * 100)}%"></span>`)
+        .map((v) => {
+          const tip = `${this.fmtExact(v)} tokens`;
+          return `<span style="height:${Math.max(5, (v / max) * 100)}%" data-tip="${tip}"></span>`;
+        })
         .join("");
+    },
+    sparkBarsHero(which) {
+      const daily = this.data.daily || {};
+      const days = Object.keys(daily).slice(-12);
+      if (days.length === 0) {
+        return Array(8).fill('<span style="height:5%" data-tip="No data"></span>').join("");
+      }
+      const raw = days.map((d) => {
+        const row = daily[d];
+        if (which === "efficiency") {
+          const denom = row.input + row.cache_read + row.cache_create;
+          return denom > 0 ? row.cache_read / denom : 0;
+        }
+        if (which === "savings") return row.cache_read;
+        return row.total;
+      });
+      const max = Math.max(...raw, which === "efficiency" ? 0.01 : 1);
+      const fmtTip = (v, dateStr) => {
+        const label = dateStr.length >= 10 ? dateStr.slice(5) : dateStr;
+        if (which === "efficiency") return `${label} · ${(v * 100).toFixed(1)}% from cache`;
+        if (which === "savings") return `${label} · ${this.fmtExact(v)} cache-read tokens`;
+        return `${label} · ${this.fmtExact(v)} tokens`;
+      };
+      return raw.map((v, i) => {
+        const tip = fmtTip(v, days[i]);
+        return `<span style="height:${Math.max(5, (v / max) * 100)}%" data-tip="${tip}"></span>`;
+      }).join("");
     },
 
     _initCharts() {
@@ -169,7 +354,7 @@ function dashboard() {
         {
           animationDuration: 600,
           grid: { left: 40, right: 16, top: 20, bottom: 30 },
-          tooltip: { trigger: "axis", backgroundColor: "#1a0b2e", borderColor: "#8b5cf6", textStyle: { color: "#fff" } },
+          tooltip: { show: false },
           legend: { show: false },
           xAxis: { type: "category", data: axis, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10 } },
           yAxis: { type: "value", splitLine: { lineStyle: { color: "rgba(255,255,255,0.07)" } }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
@@ -199,10 +384,17 @@ function dashboard() {
       this.charts.heatmap.setOption(
         {
           tooltip: {
-            formatter: (p) => `${days[p.data[0]]} ${p.data[1]}:00 — ${this.fmt(p.data[2])}`,
+            formatter: (p) => {
+              const hour = p.data[0];
+              const day = days[p.data[1]];
+              const hh = String(hour).padStart(2, "0");
+              return `${day} ${hh}:00 — ${this.fmtExact(p.data[2])} tokens`;
+            },
             backgroundColor: "#1a0b2e",
             borderColor: "#8b5cf6",
             textStyle: { color: "#fff" },
+            confine: true,
+            extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
           },
           grid: { left: 40, right: 16, top: 16, bottom: 30 },
           xAxis: { type: "category", data: Array.from({ length: 24 }, (_, i) => i), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 9, interval: 2 } },
@@ -221,7 +413,19 @@ function dashboard() {
       const m = this.data.token_mix || { input: 0, output: 0, cache_create: 0, cache_read: 0 };
       this.charts.donut.setOption(
         {
-          tooltip: { trigger: "item", backgroundColor: "#1a0b2e", borderColor: "#8b5cf6", textStyle: { color: "#fff" } },
+          tooltip: {
+            trigger: "item",
+            backgroundColor: "#1a0b2e",
+            borderColor: "#8b5cf6",
+            textStyle: { color: "#fff" },
+            confine: true,
+            extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
+            formatter: (p) => {
+              const pct = (p.percent ?? 0).toFixed(1) + "%";
+              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${p.name} · ${pct}</div>`;
+              return head + this._tooltipRow(p.color, "Tokens", p.value);
+            },
+          },
           legend: { bottom: 0, textStyle: { color: "rgba(255,255,255,0.75)", fontSize: 11 }, itemWidth: 10, itemHeight: 10, icon: "roundRect" },
           series: [{
             type: "pie",
@@ -254,7 +458,26 @@ function dashboard() {
       });
       this.charts.projects.setOption(
         {
-          tooltip: { trigger: "axis", backgroundColor: "#1a0b2e", borderColor: "#8b5cf6", textStyle: { color: "#fff" } },
+          tooltip: {
+            trigger: "item",
+            backgroundColor: "#1a0b2e",
+            borderColor: "#8b5cf6",
+            textStyle: { color: "#fff" },
+            confine: true,
+            extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
+            formatter: (p) => {
+              const proj = p.name;
+              const row = by[proj] || {};
+              const total = (row.input || 0) + (row.output || 0) + (row.cache_create || 0) + (row.cache_read || 0);
+              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${proj}</div>`;
+              return head
+                + this._tooltipRow("#60a5fa", "Input", row.input || 0)
+                + this._tooltipRow("#ec4899", "Output", row.output || 0)
+                + this._tooltipRow("#fbbf24", "Cache W", row.cache_create || 0)
+                + this._tooltipRow("#34d399", "Cache R", row.cache_read || 0)
+                + this._tooltipTotal(total);
+            },
+          },
           grid: { left: 110, right: 30, top: 8, bottom: 20 },
           xAxis: { type: "value", splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
           yAxis: { type: "category", data: names, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11 } },
@@ -276,7 +499,26 @@ function dashboard() {
       const colors = ["#8b5cf6", "#06b6d4", "#34d399", "#ec4899", "#fbbf24", "#f97316"];
       this.charts.models.setOption(
         {
-          tooltip: { trigger: "axis", backgroundColor: "#1a0b2e", borderColor: "#8b5cf6", textStyle: { color: "#fff" } },
+          tooltip: {
+            trigger: "item",
+            backgroundColor: "#1a0b2e",
+            borderColor: "#8b5cf6",
+            textStyle: { color: "#fff" },
+            confine: true,
+            extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
+            formatter: (p) => {
+              const model = p.name;
+              const row = by[model] || {};
+              const total = row.total || p.value || 0;
+              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${model}</div>`;
+              return head
+                + this._tooltipRow("#60a5fa", "Input", row.input || 0)
+                + this._tooltipRow("#ec4899", "Output", row.output || 0)
+                + this._tooltipRow("#fbbf24", "Cache W", row.cache_create || 0)
+                + this._tooltipRow("#34d399", "Cache R", row.cache_read || 0)
+                + this._tooltipTotal(total);
+            },
+          },
           grid: { left: 90, right: 40, top: 8, bottom: 20 },
           xAxis: { type: "value", splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
           yAxis: { type: "category", data: names, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "Cascadia Mono, Consolas, ui-monospace, monospace" } },

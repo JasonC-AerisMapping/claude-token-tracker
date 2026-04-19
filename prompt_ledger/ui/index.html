@@ -47,25 +47,25 @@
         <div class="card-label"><span class="card-icon">Σ</span>Total tokens</div>
         <div class="hero-value grad-purple" x-text="fmt(data.total_tokens)">—</div>
         <div class="hero-delta" x-text="fmtTrend(data.weekly_trend_pct)">—</div>
-        <div class="sparkline" x-html="sparkBars(sparkSeries('total'), 'purple')"></div>
+        <div class="sparkline" x-html="sparkBarsHero('total')"></div>
       </div>
       <div class="glass">
         <div class="card-label"><span class="card-icon">◎</span>Today</div>
         <div class="hero-value grad-pink" x-text="fmt(data.today_tokens)">—</div>
         <div class="hero-delta" x-text="(data.sessions?.length ?? 0) + ' recent sessions'"></div>
-        <div class="sparkline pink" x-html="sparkBars(sparkSeries('today'), 'pink')"></div>
+        <div class="sparkline pink" x-html="sparkBarsHero('today')"></div>
       </div>
       <div class="glass">
-        <div class="card-label"><span class="card-icon">↻</span>Cache hit rate</div>
-        <div class="hero-value grad-cyan" x-text="fmtPct(data.cache_hit_rate)">—</div>
-        <div class="hero-delta">of input comes from cache</div>
-        <div class="sparkline cyan" x-html="sparkBars(sparkSeries('hit'), 'cyan')"></div>
+        <div class="card-label"><span class="card-icon">↻</span>Cache efficiency</div>
+        <div class="hero-value grad-cyan" x-text="fmtPct(data.cache_efficiency)">—</div>
+        <div class="hero-delta" x-text="fmtReuse(data.cache_reuse_ratio)">—</div>
+        <div class="sparkline cyan" x-html="sparkBarsHero('efficiency')"></div>
       </div>
       <div class="glass">
         <div class="card-label"><span class="card-icon">$</span>Cache savings</div>
         <div class="hero-value grad-mint" x-text="fmtUsd(data.cache_savings_usd)">—</div>
         <div class="hero-delta">saved vs. no-cache pricing</div>
-        <div class="sparkline mint" x-html="sparkBars(sparkSeries('savings'), 'mint')"></div>
+        <div class="sparkline mint" x-html="sparkBarsHero('savings')"></div>
       </div>
     </div>
 
@@ -97,8 +97,8 @@
     <!-- Main charts -->
     <div class="main-charts">
       <div class="glass">
-        <div class="chart-title">30-day token usage</div>
-        <div class="chart-sub">Stacked by type · 7-day moving average overlay</div>
+        <div class="chart-title" x-text="dailyChartTitle()">Token usage</div>
+        <div class="chart-sub" x-text="dailyChartSub()">Stacked by type</div>
         <div id="chart-daily" class="area-wrap"></div>
       </div>
       <div class="glass">
@@ -117,7 +117,7 @@
       </div>
       <div class="glass">
         <div class="chart-title">Tokens by project</div>
-        <div class="chart-sub">Top 6 · click to filter</div>
+        <div class="chart-sub">Top 6 by total tokens</div>
         <div id="chart-projects" style="height: 260px; margin-top: 8px;"></div>
       </div>
       <div class="glass">
@@ -135,12 +135,11 @@
       </div>
       <div class="session-rows">
         <div class="session-row header">
-          <div>Session</div><div>Project</div><div>Model</div>
-          <div>In</div><div>Out</div><div>Velocity</div><div>When</div>
+          <div>Project</div><div>Model</div>
+          <div class="num">In</div><div class="num">Out</div><div>Velocity</div><div class="num">When</div>
         </div>
         <template x-for="s in (data.sessions ?? [])" :key="s.session_id">
           <div class="session-row">
-            <div class="session-title" x-text="s.title"></div>
             <div class="session-project" x-text="s.project"></div>
             <div class="session-model" x-text="s.model"></div>
             <div class="session-num in" x-text="fmt(s.input_tokens)"></div>

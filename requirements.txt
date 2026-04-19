@@ -1,4 +1,5 @@
 pywebview>=6.0
 pythonnet ; platform_system == "Windows"
+tzdata ; platform_system == "Windows"
 pytest
 pyinstaller
