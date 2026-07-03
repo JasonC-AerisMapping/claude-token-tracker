@@ -92,9 +92,48 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.4; transform: scale(1.4); }
   }
+  .live.offline .live-dot {
+    background: #f87171;
+    box-shadow: 0 0 10px #f87171;
+    animation: none;
+  }
+  .live.offline { color: #fca5a5; }
   .updated {
     font-size: 11px;
     color: var(--dim);
+  }
+  .project-select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    color: var(--dim2);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 7px 12px;
+    max-width: 220px;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+  }
+  .project-select:hover { color: #fff; }
+  .project-select option { background: #1a0b2e; color: #fff; }
+  .export-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    color: var(--dim2);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 7px 14px;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    transition: all 0.15s;
+  }
+  .export-btn:hover {
+    color: #fff;
+    box-shadow: 0 0 12px rgba(139,92,246,0.3);
   }
 
   /* ── Glass card base ─────────────────── */
@@ -227,6 +266,7 @@
   .chip-icon.flame { background: linear-gradient(135deg, rgba(249,115,22,0.35), rgba(236,72,153,0.25)); border: 1px solid rgba(249,115,22,0.4); box-shadow: 0 0 20px rgba(249,115,22,0.25); }
   .chip-icon.clock { background: linear-gradient(135deg, rgba(139,92,246,0.35), rgba(6,182,212,0.25)); border: 1px solid rgba(139,92,246,0.4); box-shadow: 0 0 20px rgba(139,92,246,0.25); }
   .chip-icon.bolt  { background: linear-gradient(135deg, rgba(6,182,212,0.35), rgba(52,211,153,0.25)); border: 1px solid rgba(6,182,212,0.4); box-shadow: 0 0 20px rgba(6,182,212,0.25); }
+  .chip-icon.cache { background: linear-gradient(135deg, rgba(52,211,153,0.35), rgba(139,92,246,0.25)); border: 1px solid rgba(52,211,153,0.4); box-shadow: 0 0 20px rgba(52,211,153,0.25); }
   .chip-value {
     font-size: 18px;
     font-weight: 700;
@@ -533,6 +573,8 @@
   .session-num { font-weight: 600; font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace; font-size: 11px; }
   .session-num.in  { color: #7dd3fc; }
   .session-num.out { color: #f9a8d4; }
+  .session-num.cost { color: #86efac; }
+  .session-row.clickable { cursor: pointer; }
   .mini-spark {
     display: flex;
     align-items: flex-end;

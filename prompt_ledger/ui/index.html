@@ -22,10 +22,20 @@
         <div class="logo-dot"></div>
         <div>
           <div class="logo-text">Prompt Ledger</div>
-          <div class="logo-sub">Max plan</div>
+          <div class="logo-sub" x-text="appInfo">—</div>
         </div>
       </div>
       <div class="header-right">
+        <!-- Project filter -->
+        <select
+          class="project-select"
+          x-show="(data.all_projects?.length ?? 0) > 1"
+          @change="setProject($event.target.value || null)">
+          <option value="">All projects</option>
+          <template x-for="p in (data.all_projects ?? [])" :key="p">
+            <option :value="p" :selected="project === p" x-text="labelFor(p)"></option>
+          </template>
+        </select>
         <!-- Range filter -->
         <div class="range-filter">
           <template x-for="r in ['24h','7d','30d','all']" :key="r">
@@ -36,8 +46,11 @@
               x-text="r"></button>
           </template>
         </div>
+        <button class="export-btn" @click="exportCsv()" title="Export all sessions to CSV">Export CSV</button>
         <div class="updated" x-text="'Updated ' + updatedAt"></div>
-        <div class="live"><span class="live-dot"></span>LIVE</div>
+        <div class="live" :class="{'offline': !live}">
+          <span class="live-dot"></span><span x-text="live ? 'LIVE' : 'OFFLINE'">LIVE</span>
+        </div>
       </div>
     </div>
 
@@ -56,13 +69,13 @@
         <div class="sparkline pink" x-html="sparkBarsHero('today')"></div>
       </div>
       <div class="glass">
-        <div class="card-label"><span class="card-icon">↻</span>Cache efficiency</div>
-        <div class="hero-value grad-cyan" x-text="fmtPct(data.cache_efficiency)">—</div>
-        <div class="hero-delta" x-text="fmtReuse(data.cache_reuse_ratio)">—</div>
-        <div class="sparkline cyan" x-html="sparkBarsHero('efficiency')"></div>
+        <div class="card-label"><span class="card-icon">$</span>Est. API cost</div>
+        <div class="hero-value grad-cyan" x-text="fmtUsd(data.est_cost_usd)">—</div>
+        <div class="hero-delta">if billed at public API rates</div>
+        <div class="sparkline cyan" x-html="sparkBarsHero('total')"></div>
       </div>
       <div class="glass">
-        <div class="card-label"><span class="card-icon">$</span>Cache savings</div>
+        <div class="card-label"><span class="card-icon">↻</span>Cache savings</div>
         <div class="hero-value grad-mint" x-text="fmtUsd(data.cache_savings_usd)">—</div>
         <div class="hero-delta">saved vs. no-cache pricing</div>
         <div class="sparkline mint" x-html="sparkBarsHero('savings')"></div>
@@ -90,6 +103,13 @@
         <div>
           <div class="chip-label">Active now</div>
           <div class="chip-value" x-text="fmtActive(data.active_now_tpm)"></div>
+        </div>
+      </div>
+      <div class="glass chip">
+        <div class="chip-icon cache">↻</div>
+        <div>
+          <div class="chip-label">Cache efficiency</div>
+          <div class="chip-value" x-text="fmtCacheChip(data.cache_efficiency, data.cache_reuse_ratio)"></div>
         </div>
       </div>
     </div>
@@ -135,15 +155,17 @@
       </div>
       <div class="session-rows">
         <div class="session-row header">
-          <div>Project</div><div>Model</div>
-          <div class="num">In</div><div class="num">Out</div><div>Velocity</div><div class="num">When</div>
+          <div>Session</div><div>Model</div>
+          <div class="num">Tokens</div><div class="num">Est. cost</div><div>Velocity</div><div class="num">When</div>
         </div>
         <template x-for="s in (data.sessions ?? [])" :key="s.session_id">
-          <div class="session-row">
-            <div class="session-project" x-text="s.project"></div>
+          <div class="session-row clickable"
+               @click="openFolder(s.session_id)"
+               :title="sessionTip(s)">
+            <div class="session-project" x-text="s.title"></div>
             <div class="session-model" x-text="s.model"></div>
-            <div class="session-num in" x-text="fmt(s.input_tokens)"></div>
-            <div class="session-num out" x-text="fmt(s.output_tokens)"></div>
+            <div class="session-num" x-text="fmt(s.total_tokens)"></div>
+            <div class="session-num cost" x-text="fmtUsd(s.est_cost_usd)"></div>
             <div class="mini-spark" x-html="sparkBars(s.velocity, 'purple')"></div>
             <div class="session-when" x-text="fmtWhen(s.last_timestamp)"></div>
           </div>

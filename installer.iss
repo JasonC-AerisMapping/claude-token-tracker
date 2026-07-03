@@ -1,6 +1,6 @@
 [Setup]
 AppName=Prompt Ledger
-AppVersion=2.1.0
+AppVersion=2.2.0
 AppPublisher=Prompt Ledger
 AppPublisherURL=https://github.com/JasonC-AerisMapping/claude-token-tracker
 DefaultDirName={autopf}\Prompt Ledger

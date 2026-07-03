@@ -6,7 +6,7 @@ from typing import Iterable, Literal
 from zoneinfo import ZoneInfo
 
 from .models import Message, Session, TokenUsage
-from .pricing import cache_savings_usd, normalize_model
+from .pricing import cache_savings_usd, normalize_model, usage_cost_usd
 
 Range = Literal["24h", "7d", "30d", "all"]
 VALID_RANGES: frozenset[str] = frozenset({"24h", "7d", "30d", "all"})
@@ -44,14 +44,29 @@ def aggregate_daily(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
 
 
 def aggregate_by_project(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
-    """Return {project: TokenUsage} sorted by total descending. Excludes subagents."""
+    """Return {project: TokenUsage} sorted by total descending.
+
+    Includes subagent sessions — their tokens are real usage attributable to
+    the project, so excluding them would make project totals sum to less than
+    the grand total.
+    """
     buckets: dict[str, list[Message]] = defaultdict(list)
     for s in sessions:
-        if s.is_subagent:
-            continue
         buckets[s.project].extend(s.messages)
     totals = {p: _sum_usage(msgs) for p, msgs in buckets.items()}
     return dict(sorted(totals.items(), key=lambda kv: -kv[1].total))
+
+
+def project_label(project: str) -> str:
+    """Short display label: the last 2 path segments, '…/'-prefixed if truncated.
+
+    Claude Code project names decode to long absolute paths that are identical
+    for their first ~40 characters; the tail is the part that distinguishes them.
+    """
+    parts = project.split("/")
+    if len(parts) <= 2:
+        return project
+    return "…/" + "/".join(parts[-2:])
 
 
 def aggregate_by_model(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
@@ -62,6 +77,69 @@ def aggregate_by_model(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
         buckets[key].extend(s.messages)
     totals = {m: _sum_usage(msgs) for m, msgs in buckets.items()}
     return dict(sorted(totals.items(), key=lambda kv: -kv[1].total))
+
+
+def aggregate_series(
+    sessions: Iterable[Session], range_: Range, now: datetime
+) -> dict[str, TokenUsage]:
+    """Ordered {label: TokenUsage} for the usage chart, zero-filled.
+
+    24h → 24 hourly buckets labeled "HH:00" (DISPLAY_TZ wall clock).
+    7d / 30d → one bucket per calendar day over the trailing window.
+    all → one bucket per day from first activity (capped at 365 days back).
+
+    Zero-filling matters: without it, gaps between active days disappear and
+    the x-axis spacing lies about time.
+    """
+    msgs = [m for s in sessions for m in s.messages]
+
+    if range_ == "24h":
+        end_hour = _to_display(now).replace(minute=0, second=0, microsecond=0)
+        hours = [end_hour - timedelta(hours=i) for i in range(23, -1, -1)]
+        buckets: dict[datetime, list[Message]] = {h: [] for h in hours}
+        for m in msgs:
+            local = _to_display(m.timestamp).replace(minute=0, second=0, microsecond=0)
+            if local in buckets:
+                buckets[local].append(m)
+        return {h.strftime("%H:00"): _sum_usage(v) for h, v in buckets.items()}
+
+    end_day = _to_display(now).date()
+    if range_ == "all":
+        first = min(
+            (_to_display(m.timestamp).date() for m in msgs), default=end_day
+        )
+        start_day = max(first, end_day - timedelta(days=365))
+    else:
+        span_days = {"7d": 6, "30d": 29}[range_]
+        start_day = end_day - timedelta(days=span_days)
+
+    day_buckets: dict[str, list[Message]] = defaultdict(list)
+    for m in msgs:
+        day_buckets[_to_display(m.timestamp).strftime("%Y-%m-%d")].append(m)
+
+    out: dict[str, TokenUsage] = {}
+    day = start_day
+    while day <= end_day:
+        key = day.strftime("%Y-%m-%d")
+        out[key] = _sum_usage(day_buckets.get(key, []))
+        day = day + timedelta(days=1)
+    return out
+
+
+def session_cost_usd(s: Session) -> float:
+    """Estimated API-equivalent cost of one session. 0.0 for unknown models."""
+    return usage_cost_usd(
+        s.model,
+        input_tokens=s.input_tokens,
+        output_tokens=s.output_tokens,
+        cache_create_tokens=s.cache_create_tokens,
+        cache_read_tokens=s.cache_read_tokens,
+    )
+
+
+def total_est_cost_usd(sessions: Iterable[Session]) -> float:
+    """Sum estimated API-equivalent cost across sessions, skipping unknown models."""
+    return sum(session_cost_usd(s) for s in sessions)
 
 
 def filter_by_range(sessions: Iterable[Session], range_: Range, now: datetime) -> list[Session]:
@@ -256,12 +334,14 @@ def session_to_dict(s: Session) -> dict:
         "session_id": s.session_id,
         "title": s.title or s.session_id,
         "project": s.project,
+        "project_label": project_label(s.project),
         "model": normalize_model(s.model),
         "input_tokens": s.input_tokens,
         "output_tokens": s.output_tokens,
         "cache_create_tokens": s.cache_create_tokens,
         "cache_read_tokens": s.cache_read_tokens,
         "total_tokens": s.total_tokens,
+        "est_cost_usd": session_cost_usd(s),
         "velocity": velocity,
         "last_timestamp": s.last_timestamp.isoformat() if s.last_timestamp else None,
         "is_subagent": s.is_subagent,
@@ -276,6 +356,7 @@ def build_snapshot(
 ) -> dict:
     """Single dict returned to JS with everything the dashboard needs."""
     all_sessions = list(sessions)
+    all_projects = sorted({s.project for s in all_sessions})
     if project:
         all_sessions = [s for s in all_sessions if s.project == project]
 
@@ -287,9 +368,21 @@ def build_snapshot(
     cache_w_sum = sum(s.cache_create_tokens for s in in_range)
     cache_r_sum = sum(s.cache_read_tokens for s in in_range)
 
-    daily = {d: _usage_to_dict(u) for d, u in aggregate_daily(in_range).items()}
+    daily = {d: _usage_to_dict(u) for d, u in aggregate_series(in_range, range_, now).items()}
     projects = {p: _usage_to_dict(u) for p, u in aggregate_by_project(in_range).items()}
     models = {m: _usage_to_dict(u) for m, u in aggregate_by_model(in_range).items()}
+
+    # Per-model and per-project estimated cost (unknown models contribute 0).
+    model_cost: dict[str, float] = defaultdict(float)
+    project_cost: dict[str, float] = defaultdict(float)
+    for s in in_range:
+        c = session_cost_usd(s)
+        model_cost[normalize_model(s.model)] += c
+        project_cost[s.project] += c
+    for m, d in models.items():
+        d["est_cost_usd"] = model_cost.get(m, 0.0)
+    for p, d in projects.items():
+        d["est_cost_usd"] = project_cost.get(p, 0.0)
 
     non_sub = sorted(
         [s for s in in_range if not s.is_subagent],
@@ -302,9 +395,12 @@ def build_snapshot(
     return {
         "range": range_,
         "project": project,
+        "all_projects": all_projects,
+        "project_labels": {p: project_label(p) for p in all_projects},
         "generated_at": now.isoformat(),
         "total_tokens": total,
         "today_tokens": _today_tokens(all_sessions, now),
+        "est_cost_usd": total_est_cost_usd(in_range),
         "cache_efficiency": cache_efficiency(in_range),
         "cache_reuse_ratio": cache_reuse_ratio(in_range),
         "cache_savings_usd": total_cache_savings_usd(in_range),

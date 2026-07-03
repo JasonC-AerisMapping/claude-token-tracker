@@ -5,7 +5,7 @@ A local desktop dashboard that reads your Claude Code session logs and shows how
 **For users of [Claude Code](https://claude.com/claude-code), Anthropic's CLI coding tool.** This is a local viewer for the session logs Claude Code already writes to your machine. It is not affiliated with or endorsed by Anthropic.
 
 ![Platform: Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
-![Version 2.1.0](https://img.shields.io/badge/version-2.1.0-green)
+![Version 2.2.0](https://img.shields.io/badge/version-2.2.0-green)
 
 ---
 
@@ -13,13 +13,14 @@ A local desktop dashboard that reads your Claude Code session logs and shows how
 
 Claude Code stores a JSONL log of every session under `~/.claude/projects/`. Prompt Ledger parses those logs and renders:
 
-- **Hero metrics** — total tokens (24h / 7d / 30d / all), session count, active projects, average tokens per session
-- **Model breakdown** — input / output / cache-create / cache-read split per model
-- **Project breakdown** — tokens per project directory, sortable
-- **Velocity chart** — tokens per hour over the selected range
-- **Session explorer** — per-session detail with message-level token counts
+- **Hero metrics** — total tokens, today's tokens, estimated API-equivalent cost, and cache savings for the selected range (24h / 7d / 30d / all)
+- **Est. API cost** — what the usage would have cost at public API rates (per range, per model, per project, per session); the number that shows what a Claude subscription is worth
+- **Usage chart** — stacked by token type; hourly buckets on the 24h view, zero-filled daily buckets elsewhere, with a 7-day moving average
+- **Activity heatmap** — day-of-week × hour-of-day, local wall clock
+- **Model & project breakdowns** — input / output / cache-create / cache-read split, with cost in the tooltips; subagent usage is attributed to its project
+- **Project filter** — scope the whole dashboard to one project
+- **Recent sessions** — session title, model, tokens, cost, and a velocity sparkline; click a row to open that session's log folder
 - **CSV export** — full session table to a CSV file of your choice
-- **Jump-to-folder** — open the session's `.claude/projects/` folder in Explorer / Finder
 
 All data stays on your machine. The app has `connect-src 'none'` in its CSP — it makes no network calls.
 

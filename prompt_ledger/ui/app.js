@@ -3,8 +3,11 @@
 function dashboard() {
   return {
     range: "30d",
+    project: null,
     data: {},
     updatedAt: "—",
+    live: false,
+    appInfo: "—",
     charts: { daily: null, heatmap: null, donut: null, projects: null, models: null },
 
     async init() {
@@ -12,7 +15,14 @@ function dashboard() {
       this._setupSparkTips();
       this._setupDailyOverlay();
       window.addEventListener("resize", () => this._resizeCharts());
-      const boot = () => {
+      const boot = async () => {
+        try {
+          const info = await window.pywebview.api.get_app_info();
+          const dir = String(info.data_source || "").replace(/^.*[\\/](\.claude[\\/].*)$/, "~\\$1");
+          this.appInfo = "v" + info.version + " · " + dir;
+        } catch (e) {
+          this.appInfo = "local session logs";
+        }
         this.refresh();
         setInterval(() => this.refresh(), 5000);
       };
@@ -34,7 +44,7 @@ function dashboard() {
       guide.className = "daily-guide";
       host.appendChild(guide);
 
-      const gridLeft = 40, gridRight = 16, gridTop = 20, gridBottom = 30;
+      const gridLeft = 54, gridRight = 16, gridTop = 20, gridBottom = 30;
       const colors = { input: "#60a5fa", output: "#ec4899", cache_create: "#fbbf24", cache_read: "#34d399" };
       const fmt = (n) => Math.round(Number(n) || 0).toLocaleString("en-US");
 
@@ -141,25 +151,61 @@ function dashboard() {
     async refresh() {
       if (!window.pywebview?.api?.get_dashboard) {
         console.warn("pywebview bridge not ready");
+        this.live = false;
         return;
       }
       try {
-        const snap = await window.pywebview.api.get_dashboard(this.range, null);
+        const snap = await window.pywebview.api.get_dashboard(this.range, this.project);
         if (snap && !snap.error) {
           this.data = snap;
           this.updatedAt = new Date().toLocaleTimeString([], { hour12: false });
+          this.live = true;
           this._renderCharts();
         } else {
           console.warn("dashboard returned error or empty:", snap);
+          this.live = false;
         }
       } catch (err) {
         console.error("refresh failed:", err);
+        this.live = false;
       }
     },
 
     setRange(r) {
       this.range = r;
       this.refresh();
+    },
+
+    setProject(p) {
+      this.project = p;
+      this.refresh();
+    },
+
+    labelFor(p) {
+      return (this.data.project_labels || {})[p] || p;
+    },
+
+    sessionTip(s) {
+      return "Project: " + (s.project_label || s.project)
+        + "\nIn " + this.fmt(s.input_tokens) + " · Out " + this.fmt(s.output_tokens)
+        + " · Cache W " + this.fmt(s.cache_create_tokens) + " · Cache R " + this.fmt(s.cache_read_tokens)
+        + "\nClick to open the session's log folder";
+    },
+
+    async exportCsv() {
+      try {
+        await window.pywebview.api.export_csv();
+      } catch (err) {
+        console.error("export failed:", err);
+      }
+    },
+
+    async openFolder(sessionId) {
+      try {
+        await window.pywebview.api.open_session_folder(sessionId);
+      } catch (err) {
+        console.error("open folder failed:", err);
+      }
     },
 
     fmt(n) {
@@ -199,7 +245,13 @@ function dashboard() {
     },
     fmtUsd(x) {
       if (x == null) return "—";
-      return "$" + x.toFixed(2);
+      return "$" + x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+    fmtCacheChip(eff, reuse) {
+      if (eff == null) return "—";
+      let out = (eff * 100).toFixed(1) + "% from cache";
+      if (reuse != null && reuse > 0) out += " · " + reuse.toFixed(1) + "× reuse";
+      return out;
     },
     fmtReuse(x) {
       if (x == null || x === 0) return "no cache writes yet";
@@ -240,7 +292,7 @@ function dashboard() {
       return labels[this.range] || "Token usage";
     },
     dailyChartSub() {
-      if (this.range === "24h") return "Stacked by type (hourly bucketing; moving average not applicable)";
+      if (this.range === "24h") return "Stacked by type · hourly buckets";
       return "Stacked by type · 7-day moving average overlay";
     },
 
@@ -323,7 +375,8 @@ function dashboard() {
     _renderDaily() {
       const daily = this.data.daily || {};
       const dates = Object.keys(daily);
-      const axis = dates.map((d) => d.slice(5));
+      // Daily keys are "YYYY-MM-DD" (trim the year); hourly keys are "HH:00" (keep as-is).
+      const axis = dates.map((d) => (d.includes("-") ? d.slice(5) : d));
       const input = dates.map((d) => daily[d].input);
       const output = dates.map((d) => daily[d].output);
       const cacheW = dates.map((d) => daily[d].cache_create);
@@ -353,7 +406,7 @@ function dashboard() {
       this.charts.daily.setOption(
         {
           animationDuration: 600,
-          grid: { left: 40, right: 16, top: 20, bottom: 30 },
+          grid: { left: 54, right: 16, top: 20, bottom: 30 },
           tooltip: { show: false },
           legend: { show: false },
           xAxis: { type: "category", data: axis, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10 } },
@@ -369,7 +422,8 @@ function dashboard() {
               smooth: true,
               showSymbol: false,
               lineStyle: { color: "#ffffff", width: 2, type: "dashed" },
-              data: avg,
+              // Moving average is meaningless across 24 hourly buckets — hide it there.
+              data: this.range === "24h" ? [] : avg,
             },
           ],
         },
@@ -448,6 +502,7 @@ function dashboard() {
     _renderProjects() {
       const by = this.data.by_project || {};
       const names = Object.keys(by).slice(0, 6).reverse();
+      const labels = names.map((n) => this.labelFor(n));
       const input = names.map((n) => by[n].input);
       const output = names.map((n) => by[n].output);
       const cw = names.map((n) => by[n].cache_create);
@@ -464,23 +519,27 @@ function dashboard() {
             borderColor: "#8b5cf6",
             textStyle: { color: "#fff" },
             confine: true,
-            extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
+            extraCssText: "max-width: 320px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
             formatter: (p) => {
-              const proj = p.name;
+              const proj = names[p.dataIndex];
               const row = by[proj] || {};
               const total = (row.input || 0) + (row.output || 0) + (row.cache_create || 0) + (row.cache_read || 0);
               const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${proj}</div>`;
+              const cost = row.est_cost_usd != null
+                ? `<div style="font-size:11px;color:#86efac;margin-top:4px">Est. API cost: ${this.fmtUsd(row.est_cost_usd)}</div>`
+                : "";
               return head
                 + this._tooltipRow("#60a5fa", "Input", row.input || 0)
                 + this._tooltipRow("#ec4899", "Output", row.output || 0)
                 + this._tooltipRow("#fbbf24", "Cache W", row.cache_create || 0)
                 + this._tooltipRow("#34d399", "Cache R", row.cache_read || 0)
-                + this._tooltipTotal(total);
+                + this._tooltipTotal(total)
+                + cost;
             },
           },
-          grid: { left: 110, right: 30, top: 8, bottom: 20 },
-          xAxis: { type: "value", splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
-          yAxis: { type: "category", data: names, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11 } },
+          grid: { left: 120, right: 30, top: 8, bottom: 20 },
+          xAxis: { type: "value", splitNumber: 3, splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
+          yAxis: { type: "category", data: labels, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11 } },
           series: [
             mkBar("Input", input, "#60a5fa"),
             mkBar("Output", output, "#ec4899"),
@@ -511,12 +570,16 @@ function dashboard() {
               const row = by[model] || {};
               const total = row.total || p.value || 0;
               const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${model}</div>`;
+              const cost = row.est_cost_usd != null
+                ? `<div style="font-size:11px;color:#86efac;margin-top:4px">Est. API cost: ${this.fmtUsd(row.est_cost_usd)}</div>`
+                : "";
               return head
                 + this._tooltipRow("#60a5fa", "Input", row.input || 0)
                 + this._tooltipRow("#ec4899", "Output", row.output || 0)
                 + this._tooltipRow("#fbbf24", "Cache W", row.cache_create || 0)
                 + this._tooltipRow("#34d399", "Cache R", row.cache_read || 0)
-                + this._tooltipTotal(total);
+                + this._tooltipTotal(total)
+                + cost;
             },
           },
           grid: { left: 90, right: 40, top: 8, bottom: 20 },

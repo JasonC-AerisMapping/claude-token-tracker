@@ -4,7 +4,11 @@ from prompt_ledger.core.aggregator import (
     aggregate_by_model,
     aggregate_by_project,
     aggregate_daily,
+    aggregate_series,
+    build_snapshot,
     filter_by_range,
+    project_label,
+    session_cost_usd,
 )
 from prompt_ledger.core.models import Message, Session, TokenUsage
 
@@ -194,8 +198,8 @@ def test_cache_savings_sums_per_model():
         model="claude-sonnet-4-6", is_subagent=False,
         messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
     )
-    # Opus: (15 - 1.5) = 13.5 ; Sonnet: (3 - 0.3) = 2.7 → total 16.20
-    assert abs(total_cache_savings_usd([s1, s2]) - 16.20) < 0.01
+    # Opus 4.7: (5 - 0.5) = 4.5 ; Sonnet 4.6: (3 - 0.3) = 2.7 → total 7.20
+    assert abs(total_cache_savings_usd([s1, s2]) - 7.20) < 0.01
 
 
 def test_cache_savings_excludes_unknown_model():
@@ -206,6 +210,64 @@ def test_cache_savings_excludes_unknown_model():
         messages=[Message(timestamp=now, usage=TokenUsage(cache_read=1_000_000))],
     )
     assert total_cache_savings_usd([s]) == 0.0
+
+
+def test_aggregate_by_project_includes_subagents():
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    main = _make_session("proj", "claude-opus-4-8", [(t, 10)])
+    sub = _make_session("proj", "claude-opus-4-8", [(t, 5)])
+    sub.is_subagent = True
+    projects = aggregate_by_project([main, sub])
+    assert projects["proj"].input == 15
+
+
+def test_project_label_shortens_long_paths():
+    long = "Users/jason/OneDrive/Desktop/Claude/Cowork/for/Aeris/Mapping"
+    assert project_label(long) == "…/Aeris/Mapping"
+    assert project_label("short/name") == "short/name"
+
+
+def test_aggregate_series_24h_is_hourly_and_zero_filled():
+    now = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    t = datetime(2026, 4, 15, 13, 5, tzinfo=timezone.utc)  # within last 24h
+    s = _make_session("p", "claude-opus-4-8", [(t, 42)])
+    series = aggregate_series([s], "24h", now)
+    assert len(series) == 24
+    assert all(":" in k for k in series)
+    assert sum(u.input for u in series.values()) == 42
+
+
+def test_aggregate_series_7d_zero_fills_gaps():
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 4, 12, 10, 0, tzinfo=timezone.utc)
+    s = _make_session("p", "claude-opus-4-8", [(t, 7)])
+    series = aggregate_series([s], "7d", now)
+    assert len(series) == 7
+    zero_days = [k for k, u in series.items() if u.total == 0]
+    assert len(zero_days) == 6
+
+
+def test_session_cost_usd_known_model():
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = _make_session("p", "claude-opus-4-8", [(t, 1_000_000)])
+    # 1M each of input/output/cache_create/cache_read on opus-4-8 = 36.75
+    assert abs(session_cost_usd(s) - 36.75) < 0.01
+
+
+def test_build_snapshot_carries_cost_and_labels():
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = _make_session("Users/x/Deep/Nested/Project", "claude-opus-4-8", [(t, 1000)])
+    snap = build_snapshot([s], range_="7d", now=now)
+    assert snap["est_cost_usd"] > 0
+    assert snap["all_projects"] == ["Users/x/Deep/Nested/Project"]
+    assert snap["project_labels"]["Users/x/Deep/Nested/Project"] == "…/Nested/Project"
+    proj = snap["by_project"]["Users/x/Deep/Nested/Project"]
+    assert "est_cost_usd" in proj
+    model = snap["by_model"]["opus-4-8"]
+    assert "est_cost_usd" in model
+    assert snap["sessions"][0]["est_cost_usd"] > 0
+    assert snap["sessions"][0]["project_label"] == "…/Nested/Project"
 
 
 from prompt_ledger.core.aggregator import build_snapshot
