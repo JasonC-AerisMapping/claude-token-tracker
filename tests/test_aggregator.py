@@ -227,6 +227,91 @@ def test_project_label_shortens_long_paths():
     assert project_label("short/name") == "short/name"
 
 
+def _session_with_cwd(project: str, cwd: str | None, subagent: bool = False) -> Session:
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = _make_session(project, "claude-opus-4-8", [(t, 10)])
+    s.cwd = cwd
+    s.is_subagent = subagent
+    return s
+
+
+def test_derive_project_labels_uses_cwd_basename():
+    from prompt_ledger.core.aggregator import derive_project_labels
+    s = _session_with_cwd(
+        "Users/jason/OneDrive/Desktop/Claude/Output/claude/token/tracker",
+        "C:\\Users\\jason\\OneDrive\\Desktop\\Claude Output\\claude-token-tracker",
+    )
+    labels = derive_project_labels([s])
+    assert labels[s.project] == "claude-token-tracker"
+
+
+def test_derive_project_labels_prefers_main_session_cwd():
+    from prompt_ledger.core.aggregator import derive_project_labels
+    main = _session_with_cwd("proj", "C:\\Users\\j\\Merlin")
+    sub = _session_with_cwd("proj", "C:\\worktrees\\merlin-wt-1", subagent=True)
+    labels = derive_project_labels([main, sub, sub])
+    assert labels["proj"] == "Merlin"
+
+
+def test_derive_project_labels_disambiguates_shared_basenames():
+    from prompt_ledger.core.aggregator import derive_project_labels
+    a = _session_with_cwd("p/a", "C:\\code\\alpha\\dashboard")
+    b = _session_with_cwd("p/b", "C:\\code\\beta\\dashboard")
+    labels = derive_project_labels([a, b])
+    assert labels["p/a"] == "alpha/dashboard"
+    assert labels["p/b"] == "beta/dashboard"
+    assert len(set(labels.values())) == 2
+
+
+def test_derive_project_labels_falls_back_without_cwd():
+    from prompt_ledger.core.aggregator import derive_project_labels
+    s = _session_with_cwd("Users/x/Deep/Nested/Project", None)
+    labels = derive_project_labels([s])
+    assert labels[s.project] == "…/Nested/Project"
+
+
+def test_derive_project_labels_merges_case_variants_of_same_cwd():
+    from prompt_ledger.core.aggregator import derive_project_labels, project_real_paths
+    s1 = _session_with_cwd("proj", "C:\\Users\\j\\Merlin")
+    s2 = _session_with_cwd("proj", "c:\\Users\\j\\Merlin")
+    assert project_real_paths([s1, s2])["proj"] == "C:/Users/j/Merlin"
+    assert derive_project_labels([s1, s2])["proj"] == "Merlin"
+
+
+def test_cost_mix_by_type_known_model():
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = _make_session("p", "claude-opus-4-8", [(t, 1_000_000)])
+    snap = build_snapshot([s], range_="7d", now=now)
+    mix = snap["cost_mix"]
+    # 1M tokens of each type on opus-4-8: 5.00 / 25.00 / 6.25 / 0.50
+    assert abs(mix["input"] - 5.00) < 1e-9
+    assert abs(mix["output"] - 25.00) < 1e-9
+    assert abs(mix["cache_create"] - 6.25) < 1e-9
+    assert abs(mix["cache_read"] - 0.50) < 1e-9
+    # Segments must sum to the headline cost estimate.
+    assert abs(sum(mix.values()) - snap["est_cost_usd"]) < 1e-6
+
+
+def test_cost_mix_excludes_unknown_models():
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    s = _make_session("p", "future-model-9000", [(t, 1_000_000)])
+    snap = build_snapshot([s], range_="7d", now=now)
+    assert snap["cost_mix"] == {
+        "input": 0.0, "output": 0.0, "cache_create": 0.0, "cache_read": 0.0,
+    }
+
+
+def test_build_snapshot_project_paths_and_cwd_labels():
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    s = _session_with_cwd("proj", "C:\\Users\\j\\Merlin")
+    snap = build_snapshot([s], range_="7d", now=now)
+    assert snap["project_paths"]["proj"] == "C:/Users/j/Merlin"
+    assert snap["project_labels"]["proj"] == "Merlin"
+    assert snap["sessions"][0]["project_label"] == "Merlin"
+
+
 def test_aggregate_series_24h_is_hourly_and_zero_filled():
     now = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
     t = datetime(2026, 4, 15, 13, 5, tzinfo=timezone.utc)  # within last 24h
@@ -288,6 +373,7 @@ def test_build_snapshot_shape():
         "total_tokens", "today_tokens", "cache_efficiency", "cache_reuse_ratio", "cache_savings_usd",
         "streak_days", "peak_hour", "active_now_tpm",
         "daily", "heatmap", "by_project", "by_model", "token_mix",
+        "cost_mix", "project_paths",
         "sessions",
         "weekly_trend_pct",
     ]:

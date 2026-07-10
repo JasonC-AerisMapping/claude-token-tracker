@@ -92,6 +92,29 @@ def usage_cost_usd(
     ) / 1_000_000
 
 
+def usage_cost_parts_usd(
+    model: Optional[str],
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_create_tokens: int = 0,
+    cache_read_tokens: int = 0,
+) -> Optional[dict[str, float]]:
+    """Estimated USD per token type at public API rates.
+
+    Returns None for unknown models (we underreport rather than guess).
+    """
+    key = normalize_model(model)
+    if key not in PRICING:
+        return None
+    p = PRICING[key]
+    return {
+        "input": input_tokens * p["input"] / 1_000_000,
+        "output": output_tokens * p["output"] / 1_000_000,
+        "cache_create": cache_create_tokens * p["cache_write"] / 1_000_000,
+        "cache_read": cache_read_tokens * p["cache_read"] / 1_000_000,
+    }
+
+
 def cache_savings_usd(model: Optional[str], cache_read_tokens: int) -> float:
     """USD saved by using cache_read instead of regular input pricing.
 

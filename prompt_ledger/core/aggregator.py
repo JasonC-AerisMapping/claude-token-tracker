@@ -1,12 +1,17 @@
 """Rollups and derived metrics over lists of Session objects."""
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Literal
 from zoneinfo import ZoneInfo
 
 from .models import Message, Session, TokenUsage
-from .pricing import cache_savings_usd, normalize_model, usage_cost_usd
+from .pricing import (
+    cache_savings_usd,
+    normalize_model,
+    usage_cost_parts_usd,
+    usage_cost_usd,
+)
 
 Range = Literal["24h", "7d", "30d", "all"]
 VALID_RANGES: frozenset[str] = frozenset({"24h", "7d", "30d", "all"})
@@ -60,13 +65,76 @@ def aggregate_by_project(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
 def project_label(project: str) -> str:
     """Short display label: the last 2 path segments, '…/'-prefixed if truncated.
 
-    Claude Code project names decode to long absolute paths that are identical
-    for their first ~40 characters; the tail is the part that distinguishes them.
+    Fallback only — the decoded project key is lossy (real hyphens in folder
+    names become '/'), so prefer labels from derive_project_labels, which uses
+    the sessions' real cwd. Kept for projects whose logs carry no cwd.
     """
     parts = project.split("/")
     if len(parts) <= 2:
         return project
     return "…/" + "/".join(parts[-2:])
+
+
+def _normalize_cwd(path: str) -> str:
+    """Normalize a logged cwd for voting/display: one separator style, upper drive."""
+    p = path.replace("\\", "/").rstrip("/")
+    if len(p) >= 2 and p[1] == ":":
+        p = p[0].upper() + p[1:]
+    return p
+
+
+def project_real_paths(sessions: Iterable[Session]) -> dict[str, str]:
+    """Most common real cwd per project key.
+
+    Main-session cwds outvote subagent ones (subagents may run in worktrees),
+    and case/separator variants of the same path are counted together.
+    """
+    votes: dict[str, Counter] = defaultdict(Counter)
+    sub_votes: dict[str, Counter] = defaultdict(Counter)
+    for s in sessions:
+        if not s.cwd:
+            continue
+        target = sub_votes if s.is_subagent else votes
+        target[s.project][_normalize_cwd(s.cwd)] += 1
+    out: dict[str, str] = {}
+    for project in set(votes) | set(sub_votes):
+        pool = votes.get(project) or sub_votes[project]
+        out[project] = pool.most_common(1)[0][0]
+    return out
+
+
+def derive_project_labels(sessions: Iterable[Session]) -> dict[str, str]:
+    """Human-readable label per project key.
+
+    Primary source: the real cwd's last path segment ("Merlin",
+    "claude-token-tracker"). When two projects share a basename, extend each
+    with parent segments until distinct. Projects with no logged cwd fall back
+    to project_label() over the decoded key.
+    """
+    sessions = list(sessions)
+    paths = project_real_paths(sessions)
+    projects = {s.project for s in sessions}
+
+    def tail(project: str, depth: int) -> str:
+        segs = paths[project].split("/")
+        return "/".join(segs[-depth:]) if depth < len(segs) else paths[project]
+
+    labels: dict[str, str] = {p: project_label(p) for p in projects if p not in paths}
+    depth_of = {p: 1 for p in paths}
+    while True:
+        candidate = {p: tail(p, d) for p, d in depth_of.items()}
+        collided = {
+            label for label, n in Counter(candidate.values()).items() if n > 1
+        }
+        deepen = [
+            p for p, label in candidate.items()
+            if label in collided and depth_of[p] < len(paths[p].split("/"))
+        ]
+        if not deepen:
+            labels.update(candidate)
+            return labels
+        for p in deepen:
+            depth_of[p] += 1
 
 
 def aggregate_by_model(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
@@ -334,7 +402,9 @@ def session_to_dict(s: Session) -> dict:
         "session_id": s.session_id,
         "title": s.title or s.session_id,
         "project": s.project,
-        "project_label": project_label(s.project),
+        "project_label": (
+            _normalize_cwd(s.cwd).rsplit("/", 1)[-1] if s.cwd else project_label(s.project)
+        ),
         "model": normalize_model(s.model),
         "input_tokens": s.input_tokens,
         "output_tokens": s.output_tokens,
@@ -357,6 +427,8 @@ def build_snapshot(
     """Single dict returned to JS with everything the dashboard needs."""
     all_sessions = list(sessions)
     all_projects = sorted({s.project for s in all_sessions})
+    project_labels = derive_project_labels(all_sessions)
+    project_paths = project_real_paths(all_sessions)
     if project:
         all_sessions = [s for s in all_sessions if s.project == project]
 
@@ -367,6 +439,21 @@ def build_snapshot(
     output_sum = sum(s.output_tokens for s in in_range)
     cache_w_sum = sum(s.cache_create_tokens for s in in_range)
     cache_r_sum = sum(s.cache_read_tokens for s in in_range)
+
+    # Cost by token type (donut). Unknown models contribute 0, same stance as
+    # every other cost figure.
+    cost_mix = {"input": 0.0, "output": 0.0, "cache_create": 0.0, "cache_read": 0.0}
+    for s in in_range:
+        parts = usage_cost_parts_usd(
+            s.model,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_create_tokens=s.cache_create_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+        )
+        if parts:
+            for k, v in parts.items():
+                cost_mix[k] += v
 
     daily = {d: _usage_to_dict(u) for d, u in aggregate_series(in_range, range_, now).items()}
     projects = {p: _usage_to_dict(u) for p, u in aggregate_by_project(in_range).items()}
@@ -396,7 +483,8 @@ def build_snapshot(
         "range": range_,
         "project": project,
         "all_projects": all_projects,
-        "project_labels": {p: project_label(p) for p in all_projects},
+        "project_labels": project_labels,
+        "project_paths": project_paths,
         "generated_at": now.isoformat(),
         "total_tokens": total,
         "today_tokens": _today_tokens(all_sessions, now),
@@ -418,5 +506,6 @@ def build_snapshot(
             "cache_create": cache_w_sum,
             "cache_read": cache_r_sum,
         },
+        "cost_mix": cost_mix,
         "sessions": [session_to_dict(s) for s in non_sub[:15]],
     }

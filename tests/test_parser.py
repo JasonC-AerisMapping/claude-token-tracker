@@ -85,6 +85,89 @@ def test_incremental_scanner_missing_root_returns_empty(tmp_path):
     assert scanner.scan() == []
 
 
+def test_duplicate_message_id_lines_count_once_with_final_usage(tmp_path):
+    # Real logs repeat one API call's usage on every content-block line, and
+    # mid-stream lines carry a placeholder output count. Only the last line's
+    # usage may be counted.
+    f = tmp_path / "dup.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:02Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:04Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":2,"output_tokens":2101,"cache_creation_input_tokens":300,"cache_read_input_tokens":1000}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:01:00Z","message":{"id":"msg_b","model":"claude-opus-4-7","usage":{"input_tokens":7,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":1300}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert len(session.messages) == 2
+    assert session.input_tokens == 2 + 7
+    assert session.output_tokens == 2101 + 40  # final count, not 5 + 5 + 2101 + 40
+    assert session.cache_create_tokens == 300
+    assert session.cache_read_tokens == 1000 + 1300
+
+
+def test_duplicate_message_id_keeps_first_timestamp(tmp_path):
+    f = tmp_path / "dup_ts.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":1,"output_tokens":5}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:09Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":1,"output_tokens":90}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert len(session.messages) == 1
+    assert session.messages[0].timestamp.second == 0  # anchored to when the call started
+    assert session.output_tokens == 90
+
+
+def test_lines_without_message_id_are_never_deduped(tmp_path):
+    # The basic fixture has no ids; each id-less usage line is its own message.
+    f = tmp_path / "no_ids.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:01:00Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert len(session.messages) == 2
+    assert session.input_tokens == 20
+
+
+def test_incremental_scan_dedupes_across_chunk_boundary(tmp_path):
+    # First scan ends mid-call; the finalizing line for msg_a arrives in the
+    # second scan and must update the existing message, not add a new one.
+    root = tmp_path / "projects" / "demo"
+    root.mkdir(parents=True)
+    dst = root / "s.jsonl"
+    dst.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":100}}}\n'
+    )
+    scanner = IncrementalScanner(root=tmp_path / "projects")
+    first = scanner.scan()[0]
+    assert first.output_tokens == 5
+
+    with open(dst, "a", encoding="utf-8") as f:
+        f.write(
+            '{"type":"assistant","timestamp":"2026-04-15T10:00:03Z","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":3,"output_tokens":777,"cache_read_input_tokens":100}}}\n'
+            '{"type":"assistant","timestamp":"2026-04-15T10:01:00Z","message":{"id":"msg_b","model":"claude-opus-4-7","usage":{"input_tokens":1,"output_tokens":2}}}\n'
+        )
+    second = scanner.scan()[0]
+    assert len(second.messages) == 2
+    assert second.output_tokens == 777 + 2
+    assert second.cache_read_tokens == 100
+    assert second.input_tokens == 3 + 1
+
+
+def test_session_cwd_captured_from_first_entry(tmp_path):
+    f = tmp_path / "cwd.jsonl"
+    f.write_text(
+        '{"type":"user","timestamp":"2026-04-15T10:00:00Z","cwd":"C:\\\\Users\\\\jason\\\\OneDrive\\\\Desktop\\\\Merlin"}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:05Z","cwd":"C:\\\\Users\\\\jason\\\\somewhere-else","message":{"id":"msg_a","model":"claude-opus-4-7","usage":{"input_tokens":1,"output_tokens":1}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert session.cwd == "C:\\Users\\jason\\OneDrive\\Desktop\\Merlin"
+
+
+def test_session_cwd_none_when_absent(fixtures_dir):
+    session = parse_session_file(fixtures_dir / "session_basic.jsonl", project="demo")
+    assert session.cwd is None
+
+
 def test_incremental_scanner_removes_deleted_files(fixtures_dir, tmp_path):
     src = fixtures_dir / "session_basic.jsonl"
     root = tmp_path / "projects" / "demo"

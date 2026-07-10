@@ -131,13 +131,13 @@
     <!-- Breakdowns -->
     <div class="breakdown">
       <div class="glass">
-        <div class="chart-title">Token mix</div>
-        <div class="chart-sub" x-text="'Range: ' + range"></div>
+        <div class="chart-title">Cost mix</div>
+        <div class="chart-sub" x-text="donutSub()">Est. API cost by type</div>
         <div id="chart-donut" style="height: 260px;"></div>
       </div>
       <div class="glass">
         <div class="chart-title">Tokens by project</div>
-        <div class="chart-sub">Top 6 by total tokens</div>
+        <div class="chart-sub" x-text="projectsSub()">By total tokens</div>
         <div id="chart-projects" style="height: 260px; margin-top: 8px;"></div>
       </div>
       <div class="glass">

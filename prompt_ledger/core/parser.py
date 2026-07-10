@@ -46,15 +46,19 @@ def parse_session_file(
 
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            _ingest_lines(session, f)
+            _ingest_lines(session, f, {})
     except OSError:
         return None
 
     return session
 
 
-def _ingest_lines(session: Session, stream) -> None:
-    """Consume lines from an open text stream, mutating session in place."""
+def _ingest_lines(session: Session, stream, msg_index: dict[str, int]) -> None:
+    """Consume lines from an open text stream, mutating session in place.
+
+    ``msg_index`` maps message.id -> position in session.messages and must
+    persist across incremental reads of the same file (see IncrementalScanner).
+    """
     for line in stream:
         line = line.strip()
         if not line:
@@ -63,12 +67,15 @@ def _ingest_lines(session: Session, stream) -> None:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        _apply_entry(session, entry)
+        _apply_entry(session, entry, msg_index)
 
 
-def _apply_entry(session: Session, entry: dict) -> None:
+def _apply_entry(session: Session, entry: dict, msg_index: dict[str, int]) -> None:
     entry_type = entry.get("type")
     timestamp = entry.get("timestamp")
+
+    if session.cwd is None and entry.get("cwd"):
+        session.cwd = entry["cwd"]
 
     if entry_type == "ai-title":
         session.title = entry.get("aiTitle")
@@ -92,6 +99,20 @@ def _apply_entry(session: Session, entry: dict) -> None:
             cache_create=usage.get("cache_creation_input_tokens", 0),
             cache_read=usage.get("cache_read_input_tokens", 0),
         )
+
+        # One API call is logged once per content block, every line repeating
+        # the call's usage — and mid-stream lines carry a placeholder output
+        # count. Counting each line multiplies real usage ~2.5x. Keep exactly
+        # one Message per message.id, always with the latest (final) usage.
+        mid = msg.get("id")
+        if mid is not None:
+            pos = msg_index.get(mid)
+            if pos is not None:
+                old = session.messages[pos]
+                session.messages[pos] = Message(timestamp=old.timestamp, usage=u)
+                return
+            msg_index[mid] = len(session.messages)
+
         session.messages.append(Message(timestamp=ts, usage=u))
         if session.first_timestamp is None or ts < session.first_timestamp:
             session.first_timestamp = ts
@@ -104,6 +125,9 @@ class _FileState:
     offset: int
     mtime: float
     session: Session
+    # message.id -> index in session.messages; must survive between scans so a
+    # usage-finalizing line in a later chunk updates rather than duplicates.
+    msg_index: dict[str, int]
 
 
 class IncrementalScanner:
@@ -162,14 +186,16 @@ class IncrementalScanner:
                 model=None,
                 is_subagent=is_subagent,
             )
+            msg_index: dict[str, int] = {}
             try:
                 with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                    _ingest_lines(session, f)
+                    _ingest_lines(session, f, msg_index)
                     new_offset = f.tell()
             except OSError:
                 return
             self._state[filepath] = _FileState(
-                offset=new_offset, mtime=stat.st_mtime, session=session
+                offset=new_offset, mtime=stat.st_mtime, session=session,
+                msg_index=msg_index,
             )
             return
 
@@ -181,12 +207,14 @@ class IncrementalScanner:
             state.session.model = None
             state.session.first_timestamp = None
             state.session.last_timestamp = None
+            state.session.cwd = None
+            state.msg_index.clear()
             state.offset = 0
 
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(state.offset)
-                _ingest_lines(state.session, f)
+                _ingest_lines(state.session, f, state.msg_index)
                 state.offset = f.tell()
         except OSError:
             return

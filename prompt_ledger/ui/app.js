@@ -295,6 +295,18 @@ function dashboard() {
       if (this.range === "24h") return "Stacked by type · hourly buckets";
       return "Stacked by type · 7-day moving average overlay";
     },
+    donutSub() {
+      const c = this.data.cost_mix || {};
+      const costTotal = (c.input || 0) + (c.output || 0) + (c.cache_create || 0) + (c.cache_read || 0);
+      // Falls back to raw token counts when no session has a priced model.
+      return (costTotal > 0 ? "Est. API cost by type" : "Token count by type") + " · Range: " + this.range;
+    },
+    projectsSub() {
+      const n = Object.keys(this.data.by_project || {}).length;
+      if (n === 0) return "By total tokens";
+      if (n <= 6) return "All " + n + " project" + (n === 1 ? "" : "s") + " · by total tokens";
+      return "Top 6 of " + n + " · by total tokens";
+    },
 
     sparkSeries(which) {
       const daily = this.data.daily || {};
@@ -464,7 +476,16 @@ function dashboard() {
     },
 
     _renderDonut() {
-      const m = this.data.token_mix || { input: 0, output: 0, cache_create: 0, cache_read: 0 };
+      // Raw token counts are ~95% cache reads here, which makes a token-sized
+      // donut a single ring. Cost weighting is what actually differentiates
+      // the four types; raw counts stay available in the tooltip.
+      const toks = this.data.token_mix || { input: 0, output: 0, cache_create: 0, cache_read: 0 };
+      const cost = this.data.cost_mix || {};
+      const costTotal = (cost.input || 0) + (cost.output || 0) + (cost.cache_create || 0) + (cost.cache_read || 0);
+      const usingCost = costTotal > 0;
+      const src = usingCost ? cost : toks;
+      const tokTotal = (toks.input || 0) + (toks.output || 0) + (toks.cache_create || 0) + (toks.cache_read || 0);
+      const cachePct = tokTotal > 0 ? (100 * (toks.cache_read || 0)) / tokTotal : 0;
       this.charts.donut.setOption(
         {
           tooltip: {
@@ -476,9 +497,21 @@ function dashboard() {
             extraCssText: "max-width: 260px; white-space: normal; box-shadow: 0 8px 24px rgba(0,0,0,0.45);",
             formatter: (p) => {
               const pct = (p.percent ?? 0).toFixed(1) + "%";
-              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${p.name} · ${pct}</div>`;
-              return head + this._tooltipRow(p.color, "Tokens", p.value);
+              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${p.name} · ${pct} of ${usingCost ? "cost" : "tokens"}</div>`;
+              const costRow = usingCost
+                ? `<div style="display:flex;justify-content:space-between;gap:16px;font-size:12px;line-height:1.6"><span>Est. cost</span><span style="font-family:'Cascadia Mono',Consolas,ui-monospace,monospace;font-weight:600">${this.fmtUsd(p.value)}</span></div>`
+                : "";
+              return head + costRow + this._tooltipRow(p.color, "Tokens", toks[p.data.key] || 0);
             },
+          },
+          title: {
+            left: "center",
+            top: "34%",
+            text: cachePct.toFixed(0) + "%",
+            subtext: "of tokens from cache",
+            itemGap: 2,
+            textStyle: { color: "#fff", fontSize: 24, fontWeight: 700 },
+            subtextStyle: { color: "rgba(255,255,255,0.55)", fontSize: 10 },
           },
           legend: { bottom: 0, textStyle: { color: "rgba(255,255,255,0.75)", fontSize: 11 }, itemWidth: 10, itemHeight: 10, icon: "roundRect" },
           series: [{
@@ -488,10 +521,10 @@ function dashboard() {
             label: { show: false },
             labelLine: { show: false },
             data: [
-              { value: m.input, name: "Input", itemStyle: { color: "#60a5fa" } },
-              { value: m.output, name: "Output", itemStyle: { color: "#ec4899" } },
-              { value: m.cache_create, name: "Cache W", itemStyle: { color: "#fbbf24" } },
-              { value: m.cache_read, name: "Cache R", itemStyle: { color: "#34d399" } },
+              { value: src.input || 0, name: "Input", key: "input", itemStyle: { color: "#60a5fa" } },
+              { value: src.output || 0, name: "Output", key: "output", itemStyle: { color: "#ec4899" } },
+              { value: src.cache_create || 0, name: "Cache W", key: "cache_create", itemStyle: { color: "#fbbf24" } },
+              { value: src.cache_read || 0, name: "Cache R", key: "cache_read", itemStyle: { color: "#34d399" } },
             ],
           }],
         },
@@ -501,15 +534,32 @@ function dashboard() {
 
     _renderProjects() {
       const by = this.data.by_project || {};
-      const names = Object.keys(by).slice(0, 6).reverse();
+      const paths = this.data.project_paths || {};
+      // Sort here instead of trusting the bridge to preserve dict order.
+      const names = Object.keys(by)
+        .sort((a, b) => (by[b]?.total || 0) - (by[a]?.total || 0))
+        .slice(0, 6)
+        .reverse();
       const labels = names.map((n) => this.labelFor(n));
+      const totals = names.map((n) => by[n].total || 0);
       const input = names.map((n) => by[n].input);
       const output = names.map((n) => by[n].output);
       const cw = names.map((n) => by[n].cache_create);
       const cr = names.map((n) => by[n].cache_read);
-      const mkBar = (name, data, color) => ({
+      // Row total rendered at the end of the stack (host it on the last series).
+      const mkBar = (name, data, color, isLast) => ({
         name, type: "bar", stack: "t", data,
+        barWidth: 14,
         itemStyle: { color, borderRadius: [0, 0, 0, 0] },
+        label: isLast ? {
+          show: true,
+          position: "right",
+          distance: 6,
+          formatter: (p) => this.fmt(totals[p.dataIndex]),
+          color: "rgba(255,255,255,0.65)",
+          fontSize: 10,
+          fontFamily: "Cascadia Mono, Consolas, ui-monospace, monospace",
+        } : { show: false },
       });
       this.charts.projects.setOption(
         {
@@ -524,7 +574,8 @@ function dashboard() {
               const proj = names[p.dataIndex];
               const row = by[proj] || {};
               const total = (row.input || 0) + (row.output || 0) + (row.cache_create || 0) + (row.cache_read || 0);
-              const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${proj}</div>`;
+              const head = `<div style="font-size:12px;font-weight:600;margin-bottom:2px">${this.labelFor(proj)}</div>`
+                + `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:6px">${paths[proj] || proj}</div>`;
               const cost = row.est_cost_usd != null
                 ? `<div style="font-size:11px;color:#86efac;margin-top:4px">Est. API cost: ${this.fmtUsd(row.est_cost_usd)}</div>`
                 : "";
@@ -537,14 +588,31 @@ function dashboard() {
                 + cost;
             },
           },
-          grid: { left: 120, right: 30, top: 8, bottom: 20 },
+          // Full project names render inside the plot, above each bar, so the
+          // gutter no longer truncates them.
+          grid: { left: 8, right: 52, top: 26, bottom: 20 },
           xAxis: { type: "value", splitNumber: 3, splitLine: { show: false }, axisLabel: { color: "rgba(255,255,255,0.55)", fontSize: 10, formatter: (v) => this.fmt(v) } },
-          yAxis: { type: "category", data: labels, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11 } },
+          yAxis: {
+            type: "category",
+            data: labels,
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: {
+              interval: 0,
+              inside: true,
+              margin: 0,
+              align: "left",
+              verticalAlign: "bottom",
+              padding: [0, 0, 12, 0],
+              color: "rgba(255,255,255,0.85)",
+              fontSize: 11,
+            },
+          },
           series: [
-            mkBar("Input", input, "#60a5fa"),
-            mkBar("Output", output, "#ec4899"),
-            mkBar("Cache W", cw, "#fbbf24"),
-            mkBar("Cache R", cr, "#34d399"),
+            mkBar("Input", input, "#60a5fa", false),
+            mkBar("Output", output, "#ec4899", false),
+            mkBar("Cache W", cw, "#fbbf24", false),
+            mkBar("Cache R", cr, "#34d399", true),
           ],
         },
         { notMerge: false },

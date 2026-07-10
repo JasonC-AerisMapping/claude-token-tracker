@@ -33,6 +33,10 @@ class Session:
     messages: list[Message] = field(default_factory=list)
     first_timestamp: Optional[datetime] = None
     last_timestamp: Optional[datetime] = None
+    # Real working directory of the session (from the log's `cwd` field).
+    # The project dir name is lossy — path separators and literal hyphens both
+    # become "-" — so this is the only faithful source for display names.
+    cwd: Optional[str] = None
 
     @property
     def input_tokens(self) -> int:
