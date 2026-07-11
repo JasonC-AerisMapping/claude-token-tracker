@@ -258,10 +258,21 @@ function dashboard() {
       return x.toFixed(1) + "× avg reuse per cached token";
     },
     fmtTrend(pct) {
-      if (pct == null) return "—";
-      if (pct === 0) return "flat vs last week";
+      // Trend compares the selected range's window to the one before it;
+      // "all" has no prior window, so the backend sends null there.
+      if (pct == null) return this.range === "all" ? "all time" : "—";
+      const label = { "24h": "vs prior 24h", "7d": "vs prior 7d", "30d": "vs prior 30d" }[this.range] || "";
+      if (pct === 0) return ("flat " + label).trim();
       const arrow = pct > 0 ? "↑" : "↓";
-      return arrow + " " + (Math.abs(pct) * 100).toFixed(1) + "% vs last week";
+      return arrow + " " + (Math.abs(pct) * 100).toFixed(1) + "% " + label;
+    },
+    totalDeltaLine() {
+      const trend = this.fmtTrend(this.data.trend_pct);
+      const toks = this.data.token_mix || {};
+      const total = (toks.input || 0) + (toks.output || 0) + (toks.cache_create || 0) + (toks.cache_read || 0);
+      if (!total) return trend;
+      const share = Math.round((100 * (toks.cache_read || 0)) / total);
+      return trend + " · " + share + "% cache reads";
     },
     fmtHour(h) {
       if (h == null) return "—";
@@ -638,9 +649,11 @@ function dashboard() {
               const row = by[model] || {};
               const total = row.total || p.value || 0;
               const head = `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">${model}</div>`;
-              const cost = row.est_cost_usd != null
-                ? `<div style="font-size:11px;color:#86efac;margin-top:4px">Est. API cost: ${this.fmtUsd(row.est_cost_usd)}</div>`
-                : "";
+              const cost = model === "unknown"
+                ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:4px">Not priced (unknown model)</div>`
+                : (row.est_cost_usd != null
+                  ? `<div style="font-size:11px;color:#86efac;margin-top:4px">Est. API cost: ${this.fmtUsd(row.est_cost_usd)}</div>`
+                  : "");
               return head
                 + this._tooltipRow("#60a5fa", "Input", row.input || 0)
                 + this._tooltipRow("#ec4899", "Output", row.output || 0)

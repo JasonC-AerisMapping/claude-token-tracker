@@ -89,6 +89,8 @@ def _apply_entry(session: Session, entry: dict, msg_index: dict[str, int]) -> No
         if not session.model:
             session.model = msg.get("model")
 
+        # Usage on a timestamp-less line would be dropped here. Audited against
+        # the full corpus 2026-07-10: zero such lines exist in real logs.
         ts = _parse_timestamp(timestamp) if timestamp else None
         if ts is None:
             return
@@ -98,22 +100,30 @@ def _apply_entry(session: Session, entry: dict, msg_index: dict[str, int]) -> No
             output=usage.get("output_tokens", 0),
             cache_create=usage.get("cache_creation_input_tokens", 0),
             cache_read=usage.get("cache_read_input_tokens", 0),
+            cache_create_1h=(usage.get("cache_creation") or {}).get(
+                "ephemeral_1h_input_tokens", 0
+            ),
         )
+        model = msg.get("model")
 
         # One API call is logged once per content block, every line repeating
         # the call's usage — and mid-stream lines carry a placeholder output
         # count. Counting each line multiplies real usage ~2.5x. Keep exactly
         # one Message per message.id, always with the latest (final) usage.
+        # The model can flip mid-call (server-side fallback), so the latest
+        # line's model wins too — that's the model that produced the billing.
         mid = msg.get("id")
         if mid is not None:
             pos = msg_index.get(mid)
             if pos is not None:
                 old = session.messages[pos]
-                session.messages[pos] = Message(timestamp=old.timestamp, usage=u)
+                session.messages[pos] = Message(
+                    timestamp=old.timestamp, usage=u, model=model or old.model
+                )
                 return
             msg_index[mid] = len(session.messages)
 
-        session.messages.append(Message(timestamp=ts, usage=u))
+        session.messages.append(Message(timestamp=ts, usage=u, model=model))
         if session.first_timestamp is None or ts < session.first_timestamp:
             session.first_timestamp = ts
         if session.last_timestamp is None or ts > session.last_timestamp:

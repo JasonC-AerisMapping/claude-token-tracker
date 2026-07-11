@@ -10,6 +10,10 @@ class TokenUsage:
     output: int = 0
     cache_create: int = 0
     cache_read: int = 0
+    # Sub-count of cache_create written with 1-hour TTL (bills at 2x input,
+    # vs 1.25x for the default 5-minute TTL). Not an additional token bucket —
+    # never add it into totals.
+    cache_create_1h: int = 0
 
     @property
     def total(self) -> int:
@@ -20,6 +24,9 @@ class TokenUsage:
 class Message:
     timestamp: datetime
     usage: TokenUsage
+    # Per-message model: sessions can mix models (model switch, fallbacks),
+    # so pricing/attribution must not assume the session's first-seen model.
+    model: Optional[str] = None
 
 
 @dataclass(slots=True)

@@ -14,7 +14,7 @@ from prompt_ledger.core.aggregator import (
 )
 from prompt_ledger.core.parser import IncrementalScanner
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 
 class Api:

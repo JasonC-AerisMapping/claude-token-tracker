@@ -138,11 +138,17 @@ def derive_project_labels(sessions: Iterable[Session]) -> dict[str, str]:
 
 
 def aggregate_by_model(sessions: Iterable[Session]) -> dict[str, TokenUsage]:
-    """Return {normalized_model: TokenUsage} sorted by total descending."""
+    """Return {normalized_model: TokenUsage} sorted by total descending.
+
+    Attribution is per message — sessions can mix models (model switches,
+    fallbacks), so bucketing a whole session under its first-seen model
+    misattributes tokens. Messages without their own model fall back to
+    the session's.
+    """
     buckets: dict[str, list[Message]] = defaultdict(list)
     for s in sessions:
-        key = normalize_model(s.model)
-        buckets[key].extend(s.messages)
+        for m in s.messages:
+            buckets[normalize_model(m.model or s.model)].append(m)
     totals = {m: _sum_usage(msgs) for m, msgs in buckets.items()}
     return dict(sorted(totals.items(), key=lambda kv: -kv[1].total))
 
@@ -161,18 +167,26 @@ def aggregate_series(
     """
     msgs = [m for s in sessions for m in s.messages]
 
+    # Callers pass range-filtered sessions, so every message here belongs in
+    # the chart. Bucket edges don't line up exactly with the filter window
+    # (rolling UTC cutoff vs local calendar buckets), so edge messages are
+    # clamped into the first/last bucket instead of silently dropped —
+    # the chart must always sum to the headline total it sits under.
     if range_ == "24h":
         end_hour = _to_display(now).replace(minute=0, second=0, microsecond=0)
         hours = [end_hour - timedelta(hours=i) for i in range(23, -1, -1)]
         buckets: dict[datetime, list[Message]] = {h: [] for h in hours}
         for m in msgs:
             local = _to_display(m.timestamp).replace(minute=0, second=0, microsecond=0)
-            if local in buckets:
-                buckets[local].append(m)
+            if local not in buckets:
+                local = hours[0] if local < hours[0] else hours[-1]
+            buckets[local].append(m)
         return {h.strftime("%H:00"): _sum_usage(v) for h, v in buckets.items()}
 
     end_day = _to_display(now).date()
     if range_ == "all":
+        # Chart x-axis is capped at 365 days back; anything older is clamped
+        # into the first bucket (none exists in practice — logs start 2026-04).
         first = min(
             (_to_display(m.timestamp).date() for m in msgs), default=end_day
         )
@@ -181,9 +195,16 @@ def aggregate_series(
         span_days = {"7d": 6, "30d": 29}[range_]
         start_day = end_day - timedelta(days=span_days)
 
+    start_key = start_day.strftime("%Y-%m-%d")
+    end_key = end_day.strftime("%Y-%m-%d")
     day_buckets: dict[str, list[Message]] = defaultdict(list)
     for m in msgs:
-        day_buckets[_to_display(m.timestamp).strftime("%Y-%m-%d")].append(m)
+        key = _to_display(m.timestamp).strftime("%Y-%m-%d")
+        if key < start_key:
+            key = start_key
+        elif key > end_key:
+            key = end_key
+        day_buckets[key].append(m)
 
     out: dict[str, TokenUsage] = {}
     day = start_day
@@ -194,15 +215,25 @@ def aggregate_series(
     return out
 
 
-def session_cost_usd(s: Session) -> float:
-    """Estimated API-equivalent cost of one session. 0.0 for unknown models."""
+def message_cost_usd(m: Message, fallback_model: str | None) -> float:
+    """Estimated API-equivalent cost of one message at its own model and time."""
     return usage_cost_usd(
-        s.model,
-        input_tokens=s.input_tokens,
-        output_tokens=s.output_tokens,
-        cache_create_tokens=s.cache_create_tokens,
-        cache_read_tokens=s.cache_read_tokens,
+        m.model or fallback_model,
+        input_tokens=m.usage.input,
+        output_tokens=m.usage.output,
+        cache_create_tokens=m.usage.cache_create,
+        cache_read_tokens=m.usage.cache_read,
+        cache_create_1h_tokens=m.usage.cache_create_1h,
+        at=m.timestamp,
     )
+
+
+def session_cost_usd(s: Session) -> float:
+    """Estimated API-equivalent cost of one session, priced per message.
+
+    Unknown-model messages contribute 0.
+    """
+    return sum(message_cost_usd(m, s.model) for m in s.messages)
 
 
 def total_est_cost_usd(sessions: Iterable[Session]) -> float:
@@ -279,13 +310,19 @@ def cache_reuse_ratio(sessions: Iterable[Session]) -> float:
 
 
 def streak_days(sessions: Iterable[Session], now: datetime) -> int:
-    """Consecutive local (DISPLAY_TZ) days ending today with at least one message."""
+    """Consecutive active local (DISPLAY_TZ) days ending today or yesterday.
+
+    A quiet morning doesn't zero the streak — it survives until today is
+    over without activity.
+    """
     active: set[str] = set()
     for s in sessions:
         for m in s.messages:
             active.add(_to_display(m.timestamp).strftime("%Y-%m-%d"))
-    count = 0
     day = _to_display(now).date()
+    if day.strftime("%Y-%m-%d") not in active:
+        day = day - timedelta(days=1)
+    count = 0
     while day.strftime("%Y-%m-%d") in active:
         count += 1
         day = day - timedelta(days=1)
@@ -302,15 +339,18 @@ def peak_hour(sessions: Iterable[Session]) -> int | None:
             any_data = True
     if not any_data:
         return None
-    return max(buckets.items(), key=lambda kv: kv[1])[0]
+    # Deterministic tie-break: earliest hour wins.
+    return max(buckets.items(), key=lambda kv: (kv[1], -kv[0]))[0]
 
 
 def total_cache_savings_usd(sessions: Iterable[Session]) -> float:
-    """Sum cache savings across sessions, skipping unknown models."""
+    """Sum cache savings per message, skipping unknown models."""
     total = 0.0
     for s in sessions:
-        cr = sum(m.usage.cache_read for m in s.messages)
-        total += cache_savings_usd(s.model, cr)
+        for m in s.messages:
+            total += cache_savings_usd(
+                m.model or s.model, m.usage.cache_read, at=m.timestamp
+            )
     return total
 
 
@@ -342,11 +382,19 @@ def _active_now_tpm(sessions: Iterable[Session], now: datetime) -> float | None:
     return recent_total / span_minutes
 
 
-def _weekly_trend_pct(sessions: Iterable[Session], now: datetime) -> float:
-    # Two disjoint 7-day windows: [now-14d, now-7d) is "previous", [now-7d, now] is "this".
-    # filter_by_range only has a lower bound, so compare message-by-message here.
-    this_start = now - timedelta(days=7)
-    prev_start = now - timedelta(days=14)
+def _trend_pct(sessions: Iterable[Session], range_: Range, now: datetime) -> float | None:
+    """Change vs the immediately-prior window of the same length.
+
+    Windows match the selected range (24h vs prior 24h, 7d vs prior 7d,
+    30d vs prior 30d) so the arrow describes the same number it sits next
+    to. None for "all" — there is no prior window.
+    """
+    deltas = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+    window = deltas.get(range_)
+    if window is None:
+        return None
+    this_start = now - window
+    prev_start = now - window - window
     this_total = 0
     prev_total = 0
     for s in sessions:
@@ -440,32 +488,38 @@ def build_snapshot(
     cache_w_sum = sum(s.cache_create_tokens for s in in_range)
     cache_r_sum = sum(s.cache_read_tokens for s in in_range)
 
-    # Cost by token type (donut). Unknown models contribute 0, same stance as
-    # every other cost figure.
+    # Cost by token type (donut), priced per message so mixed-model sessions
+    # and time-windowed rates land correctly. Unknown models contribute 0,
+    # same stance as every other cost figure.
     cost_mix = {"input": 0.0, "output": 0.0, "cache_create": 0.0, "cache_read": 0.0}
     for s in in_range:
-        parts = usage_cost_parts_usd(
-            s.model,
-            input_tokens=s.input_tokens,
-            output_tokens=s.output_tokens,
-            cache_create_tokens=s.cache_create_tokens,
-            cache_read_tokens=s.cache_read_tokens,
-        )
-        if parts:
-            for k, v in parts.items():
-                cost_mix[k] += v
+        for m in s.messages:
+            parts = usage_cost_parts_usd(
+                m.model or s.model,
+                input_tokens=m.usage.input,
+                output_tokens=m.usage.output,
+                cache_create_tokens=m.usage.cache_create,
+                cache_read_tokens=m.usage.cache_read,
+                cache_create_1h_tokens=m.usage.cache_create_1h,
+                at=m.timestamp,
+            )
+            if parts:
+                for k, v in parts.items():
+                    cost_mix[k] += v
 
     daily = {d: _usage_to_dict(u) for d, u in aggregate_series(in_range, range_, now).items()}
     projects = {p: _usage_to_dict(u) for p, u in aggregate_by_project(in_range).items()}
     models = {m: _usage_to_dict(u) for m, u in aggregate_by_model(in_range).items()}
 
     # Per-model and per-project estimated cost (unknown models contribute 0).
+    # Model attribution is per message, matching aggregate_by_model.
     model_cost: dict[str, float] = defaultdict(float)
     project_cost: dict[str, float] = defaultdict(float)
     for s in in_range:
-        c = session_cost_usd(s)
-        model_cost[normalize_model(s.model)] += c
-        project_cost[s.project] += c
+        for m in s.messages:
+            c = message_cost_usd(m, s.model)
+            model_cost[normalize_model(m.model or s.model)] += c
+            project_cost[s.project] += c
     for m, d in models.items():
         d["est_cost_usd"] = model_cost.get(m, 0.0)
     for p, d in projects.items():
@@ -495,7 +549,7 @@ def build_snapshot(
         "streak_days": streak_days(all_sessions, now),
         "peak_hour": hour,
         "active_now_tpm": _active_now_tpm(all_sessions, now),
-        "weekly_trend_pct": _weekly_trend_pct(all_sessions, now),
+        "trend_pct": _trend_pct(all_sessions, range_, now),
         "daily": daily,
         "heatmap": _heatmap(in_range),
         "by_project": projects,

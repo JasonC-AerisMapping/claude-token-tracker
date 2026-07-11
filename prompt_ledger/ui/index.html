@@ -56,10 +56,10 @@
 
     <!-- Hero cards -->
     <div class="hero">
-      <div class="glass">
+      <div class="glass" title="Total includes cache-read tokens (context replayed from cache), which dominate the raw count.">
         <div class="card-label"><span class="card-icon">Σ</span>Total tokens</div>
         <div class="hero-value grad-purple" x-text="fmt(data.total_tokens)">—</div>
-        <div class="hero-delta" x-text="fmtTrend(data.weekly_trend_pct)">—</div>
+        <div class="hero-delta" x-text="totalDeltaLine()">—</div>
         <div class="sparkline" x-html="sparkBarsHero('total')"></div>
       </div>
       <div class="glass">
@@ -87,7 +87,7 @@
       <div class="glass chip">
         <div class="chip-icon flame">🔥</div>
         <div>
-          <div class="chip-label">Streak</div>
+          <div class="chip-label">Streak · all-time</div>
           <div class="chip-value" x-text="(data.streak_days ?? 0) + ' day' + ((data.streak_days === 1) ? '' : 's') + ' in a row'"></div>
         </div>
       </div>

@@ -153,6 +153,44 @@ def test_incremental_scan_dedupes_across_chunk_boundary(tmp_path):
     assert second.input_tokens == 3 + 1
 
 
+def test_parser_captures_per_message_model(tmp_path):
+    # Sessions can mix models; each message must remember its own.
+    f = tmp_path / "mixed.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-haiku-4-5","usage":{"input_tokens":10,"output_tokens":5}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:01:00Z","message":{"id":"msg_b","model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":10}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert session.model == "claude-haiku-4-5"  # first-seen, for display
+    assert [m.model for m in session.messages] == ["claude-haiku-4-5", "claude-opus-4-8"]
+
+
+def test_dedup_prefers_latest_model(tmp_path):
+    # A mid-call server-side fallback flips the model between content-block
+    # lines; the final line's model is the one that billed.
+    f = tmp_path / "flip.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-fable-5","usage":{"input_tokens":1,"output_tokens":1}}}\n'
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:02Z","message":{"id":"msg_a","model":"claude-opus-4-8","usage":{"input_tokens":1,"output_tokens":50}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert len(session.messages) == 1
+    assert session.messages[0].model == "claude-opus-4-8"
+    assert session.messages[0].usage.output == 50
+
+
+def test_parser_reads_ephemeral_1h_cache_split(tmp_path):
+    f = tmp_path / "cc1h.jsonl"
+    f.write_text(
+        '{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","message":{"id":"msg_a","model":"claude-opus-4-8","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":8485,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":8485}}}}\n'
+    )
+    session = parse_session_file(f, project="demo")
+    assert session.messages[0].usage.cache_create == 8485
+    assert session.messages[0].usage.cache_create_1h == 8485
+    # The 1h split is a sub-count, never added to totals.
+    assert session.total_tokens == 1 + 1 + 8485
+
+
 def test_session_cwd_captured_from_first_entry(tmp_path):
     f = tmp_path / "cwd.jsonl"
     f.write_text(

@@ -375,7 +375,7 @@ def test_build_snapshot_shape():
         "daily", "heatmap", "by_project", "by_model", "token_mix",
         "cost_mix", "project_paths",
         "sessions",
-        "weekly_trend_pct",
+        "trend_pct",
     ]:
         assert key in snap, f"missing key: {key}"
     assert snap["range"] == "30d"
@@ -401,9 +401,9 @@ def test_build_snapshot_heatmap_shape():
         assert 0 <= cell[1] <= 6, f"day out of range: {cell}"
 
 
-def test_weekly_trend_pct_equal_weeks_is_zero():
+def test_trend_pct_equal_windows_is_zero():
     # 100 tokens this week + 100 tokens previous week → trend should be 0%.
-    from prompt_ledger.core.aggregator import _weekly_trend_pct
+    from prompt_ledger.core.aggregator import _trend_pct
     now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
     this_msg = Message(timestamp=now - timedelta(days=3), usage=TokenUsage(input=100))
     prev_msg = Message(timestamp=now - timedelta(days=10), usage=TokenUsage(input=100))
@@ -412,12 +412,12 @@ def test_weekly_trend_pct_equal_weeks_is_zero():
         is_subagent=False,
         messages=[prev_msg, this_msg],
     )
-    assert _weekly_trend_pct([s], now) == 0.0
+    assert _trend_pct([s], "7d", now) == 0.0
 
 
-def test_weekly_trend_pct_this_week_double_prev():
+def test_trend_pct_this_window_double_prev():
     # 200 this week, 100 previous week → +100%.
-    from prompt_ledger.core.aggregator import _weekly_trend_pct
+    from prompt_ledger.core.aggregator import _trend_pct
     now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
     msgs = [
         Message(timestamp=now - timedelta(days=3), usage=TokenUsage(input=200)),
@@ -427,7 +427,150 @@ def test_weekly_trend_pct_this_week_double_prev():
         file="/x", project="p", session_id="s", title=None, model="claude-opus-4-7",
         is_subagent=False, messages=msgs,
     )
-    assert _weekly_trend_pct([s], now) == 1.0
+    assert _trend_pct([s], "7d", now) == 1.0
+
+
+def test_trend_pct_window_matches_selected_range():
+    # 24h view must compare the last 24h to the 24h before it — not fixed
+    # 7-day windows. 300 tokens in the last day, 100 the day before, plus
+    # noise earlier in the week that a 7d window would sweep in.
+    from prompt_ledger.core.aggregator import _trend_pct
+    now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=now - timedelta(hours=2), usage=TokenUsage(input=300)),
+        Message(timestamp=now - timedelta(hours=30), usage=TokenUsage(input=100)),
+        Message(timestamp=now - timedelta(days=5), usage=TokenUsage(input=9999)),
+    ]
+    s = Session(
+        file="/x", project="p", session_id="s", title=None, model="claude-opus-4-7",
+        is_subagent=False, messages=msgs,
+    )
+    assert _trend_pct([s], "24h", now) == 2.0  # (300-100)/100
+    assert _trend_pct([s], "all", now) is None  # no prior window for "all"
+
+
+def test_streak_survives_quiet_morning():
+    # Active yesterday and the day before, nothing yet today → streak is 2,
+    # not 0. It only breaks once today ends without activity.
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=now - timedelta(days=1), usage=TokenUsage(input=1)),
+        Message(timestamp=now - timedelta(days=2), usage=TokenUsage(input=1)),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False, messages=msgs,
+    )
+    assert streak_days([s], now=now) == 2
+
+
+def test_peak_hour_tie_breaks_to_earliest_hour():
+    # Equal token counts at two hours → earliest hour wins, deterministically.
+    base = datetime(2026, 4, 15, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=base.replace(hour=18), usage=TokenUsage(input=50)),  # 14 EDT
+        Message(timestamp=base.replace(hour=13), usage=TokenUsage(input=50)),  # 9 EDT
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None, model=None,
+        is_subagent=False, messages=msgs,
+    )
+    assert peak_hour([s]) == 9
+
+
+def test_series_24h_sums_to_window_total():
+    # A message inside the 24h window whose Eastern hour precedes the first
+    # chart bucket must be clamped into it, not dropped — the chart always
+    # sums to the headline total above it.
+    now = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    in_bucket = datetime(2026, 4, 15, 13, 5, tzinfo=timezone.utc)
+    edge = now - timedelta(hours=23, minutes=50)  # in window, before bucket 0
+    s = _make_session("p", "claude-opus-4-8", [(in_bucket, 42), (edge, 8)])
+    in_range = filter_by_range([s], "24h", now)
+    series = aggregate_series(in_range, "24h", now)
+    window_total = sum(sess.total_tokens for sess in in_range)
+    assert sum(u.total for u in series.values()) == window_total
+    assert len(series) == 24
+
+
+def test_series_7d_clamps_window_edge_into_first_day():
+    # Same invariant for daily buckets: a message inside the rolling 7d UTC
+    # window but on the Eastern calendar day before the first bucket lands
+    # in the first bucket instead of vanishing.
+    now = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    edge = now - timedelta(days=6, hours=20)  # inside window, prior local day
+    s = _make_session("p", "claude-opus-4-8", [(edge, 11), (now, 5)])
+    in_range = filter_by_range([s], "7d", now)
+    series = aggregate_series(in_range, "7d", now)
+    window_total = sum(sess.total_tokens for sess in in_range)
+    assert sum(u.total for u in series.values()) == window_total
+    assert len(series) == 7
+
+
+def test_session_cost_mixed_models_priced_per_message():
+    # A session that starts on haiku and switches to opus must not price the
+    # opus tokens at haiku rates.
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=t, usage=TokenUsage(output=1_000_000), model="claude-haiku-4-5"),
+        Message(timestamp=t, usage=TokenUsage(output=1_000_000), model="claude-opus-4-8"),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-haiku-4-5", is_subagent=False, messages=msgs,
+    )
+    # 1M output on haiku ($5) + 1M output on opus ($25) = $30, not $10.
+    assert abs(session_cost_usd(s) - 30.0) < 1e-9
+
+
+def test_aggregate_by_model_splits_within_session():
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=t, usage=TokenUsage(input=100), model="claude-haiku-4-5"),
+        Message(timestamp=t, usage=TokenUsage(input=900), model="claude-opus-4-8"),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-haiku-4-5", is_subagent=False, messages=msgs,
+    )
+    models = aggregate_by_model([s])
+    assert models["haiku-4-5"].input == 100
+    assert models["opus-4-8"].input == 900
+
+
+def test_synthetic_first_line_does_not_dump_session_into_unknown():
+    # A session whose first assistant line is a <synthetic> error placeholder
+    # must not attribute the real messages (which carry their own model) to
+    # "unknown" at $0.
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(timestamp=t, usage=TokenUsage(output=1_000_000), model="claude-opus-4-8"),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="<synthetic>", is_subagent=False, messages=msgs,
+    )
+    models = aggregate_by_model([s])
+    assert "unknown" not in models
+    assert models["opus-4-8"].output == 1_000_000
+    assert abs(session_cost_usd(s) - 25.0) < 1e-9
+
+
+def test_cache_write_1h_priced_at_2x_input():
+    # 1M cache-create tokens, all 1h-TTL, on opus-4-8: $10, not $6.25.
+    t = datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc)
+    msgs = [
+        Message(
+            timestamp=t,
+            usage=TokenUsage(cache_create=1_000_000, cache_create_1h=1_000_000),
+            model="claude-opus-4-8",
+        ),
+    ]
+    s = Session(
+        file="/tmp/x", project="p", session_id="x", title=None,
+        model="claude-opus-4-8", is_subagent=False, messages=msgs,
+    )
+    assert abs(session_cost_usd(s) - 10.0) < 1e-9
 
 
 def test_build_snapshot_heatmap_places_cell_at_hour_day():
