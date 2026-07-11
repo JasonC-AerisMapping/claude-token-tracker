@@ -5,7 +5,7 @@ A local desktop dashboard that reads your Claude Code session logs and shows how
 **For users of [Claude Code](https://claude.com/claude-code), Anthropic's CLI coding tool.** This is a local viewer for the session logs Claude Code already writes to your machine. It is not affiliated with or endorsed by Anthropic.
 
 ![Platform: Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
-![Version 2.2.0](https://img.shields.io/badge/version-2.2.0-green)
+![Version 2.4.0](https://img.shields.io/badge/version-2.4.0-green)
 
 ---
 
